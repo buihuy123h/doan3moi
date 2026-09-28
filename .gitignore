@@ -1,0 +1,10 @@
+node_modules/
+dist/
+bin/
+obj/
+.env
+.env.*
+.DS_Store
+.idea/
+.vscode/
+*.local

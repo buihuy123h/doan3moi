@@ -1,0 +1,33 @@
+{
+  "name": "nexus-system-svelte",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "preinstall": "npx only-allow pnpm",
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "^10.0.11",
+    "clsx": "^2.1.1",
+    "lucide-svelte": "^0.562.0",
+    "svelte-sonner": "^1.0.5",
+    "tailwind-merge": "^3.4.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@tsconfig/svelte": "^5.0.5",
+    "autoprefixer": "^10.4.23",
+    "postcss": "^8.5.6",
+    "svelte": "^5.43.6",
+    "svelte-check": "^4.3.3",
+    "tailwindcss": "^3.4.19",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.4"
+  }
+}
