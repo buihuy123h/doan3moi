@@ -1,4 +1,4 @@
-﻿using doanki3API.Models;
+using doanki3API.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace doanki3API.Data;
@@ -21,6 +21,8 @@ public partial class MyAppDbContext : DbContext
     public virtual DbSet<Employee> Employees { get; set; }
 
     public virtual DbSet<Equipment> Equipment { get; set; }
+
+    public virtual DbSet<EquipmentRequest> EquipmentRequests { get; set; }
 
     public virtual DbSet<Feedback> Feedbacks { get; set; }
 
@@ -457,6 +459,10 @@ public partial class MyAppDbContext : DbContext
             entity.Property(e => e.BulkDiscountPercent)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(5, 2)");
+            // Cột tính toán: SQL Server tự suy từ BulkConnectionsCount (> 50 => miễn cọc).
+            // Khai báo computed để EF không bao giờ INSERT/UPDATE vào cột này.
+            entity.Property(e => e.DepositWaived)
+                .HasComputedColumnSql("CAST(CASE WHEN [BulkConnectionsCount] > 50 THEN 1 ELSE 0 END AS BIT)");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
@@ -631,6 +637,78 @@ public partial class MyAppDbContext : DbContext
                 .HasForeignKey(d => d.VendorId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_PurchaseOrder_Vendor");
+        });
+
+        modelBuilder.Entity<EquipmentRequest>(entity =>
+        {
+            entity.HasKey(e => e.RequestId);
+
+            entity.ToTable("EquipmentRequest");
+
+            entity.HasIndex(e => e.Status, "IX_EquipmentRequest_Status");
+            entity.HasIndex(e => e.StoreId, "IX_EquipmentRequest_StoreID");
+            entity.HasIndex(e => e.EmployeeId, "IX_EquipmentRequest_EmployeeID");
+            entity.HasIndex(e => e.OrderId, "IX_EquipmentRequest_OrderID");
+
+            entity.Property(e => e.RequestId)
+                .HasMaxLength(30)
+                .IsUnicode(false)
+                .HasColumnName("RequestID");
+            entity.Property(e => e.OrderId)
+                .HasMaxLength(11)
+                .IsUnicode(false)
+                .HasColumnName("OrderID");
+            entity.Property(e => e.StoreId)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasColumnName("StoreID");
+            entity.Property(e => e.EmployeeId)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasColumnName("EmployeeID");
+            entity.Property(e => e.InventoryId)
+                .HasMaxLength(30)
+                .IsUnicode(false)
+                .HasColumnName("InventoryID");
+            entity.Property(e => e.ItemName).HasMaxLength(150);
+            entity.Property(e => e.DeviceType)
+                .HasMaxLength(50)
+                .IsUnicode(false);
+            entity.Property(e => e.Quantity).HasDefaultValue(1);
+            entity.Property(e => e.Urgency)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasDefaultValue("Normal");
+            entity.Property(e => e.Status)
+                .HasMaxLength(30)
+                .IsUnicode(false)
+                .HasDefaultValue("Pending");
+            entity.Property(e => e.Reason).HasMaxLength(500);
+            entity.Property(e => e.AdminNotes).HasMaxLength(500);
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+            entity.Property(e => e.UpdatedAt).HasColumnType("datetime");
+
+            entity.HasOne(d => d.Order).WithMany()
+                .HasForeignKey(d => d.OrderId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("FK_EquipmentRequest_Orders");
+
+            entity.HasOne(d => d.Store).WithMany()
+                .HasForeignKey(d => d.StoreId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_EquipmentRequest_RetailStore");
+
+            entity.HasOne(d => d.Employee).WithMany()
+                .HasForeignKey(d => d.EmployeeId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_EquipmentRequest_Employee");
+
+            entity.HasOne(d => d.Inventory).WithMany()
+                .HasForeignKey(d => d.InventoryId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("FK_EquipmentRequest_Inventory");
         });
 
         modelBuilder.Entity<RetailStore>(entity =>

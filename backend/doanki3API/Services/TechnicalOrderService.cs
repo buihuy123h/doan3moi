@@ -115,7 +115,10 @@ public sealed class TechnicalOrderService
                 o.AssignedTechnicianName,
                 o.AssignedTechnicianPhone,
                 o.AssignedTechnicianDate,
-                o.EmployeeId))
+                o.EmployeeId,
+                o.Customer.IdProofType,
+                o.Customer.IdProofNumber,
+                o.DepositWaived))
             .ToListAsync(cancellationToken);
     }
 
@@ -163,7 +166,8 @@ public sealed class TechnicalOrderService
                 o.RetailApprovalNotes,
                 o.AssignedTechnicianName,
                 o.AssignedTechnicianPhone,
-                o.AssignedTechnicianDate))
+                o.AssignedTechnicianDate,
+                o.DepositWaived))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -340,40 +344,82 @@ public sealed class TechnicalOrderService
                 order.Status));
     }
 
+    /// <summary>
+    /// Kiểm tra nghiệp vụ trước khi tạo đơn, dùng chung cho quầy/cổng khách hàng
+    /// (/api/Technical/orders) và trang đăng ký công khai (/api/public/orders).
+    /// Trả về câu lỗi tiếng Việt, hoặc null nếu hợp lệ.
+    /// </summary>
+    public static string? ValidateCreateRequest(CreateOrderRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.IdProofType) &&
+            request.IdProofType.Equals("National ID Card", StringComparison.OrdinalIgnoreCase) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(request.IdProofNumber ?? string.Empty, @"^\d{12}$"))
+        {
+            return "Số CCCD phải gồm đúng 12 chữ số.";
+        }
+
+        if (string.Equals(request.ConnectionType, "Dial-Up", StringComparison.OrdinalIgnoreCase) &&
+            (string.IsNullOrWhiteSpace(request.ExistingLandlineAccountId) ||
+             !request.ExistingLandlineAccountId.StartsWith("T", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Khách hàng bắt buộc phải có tài khoản Landline (Cố định, mã T...) để đăng ký mạng Dial-Up.";
+        }
+
+        if (request.BulkConnectionsCount < 1)
+        {
+            return "Số lượng kết nối phải từ 1 trở lên.";
+        }
+
+        return null;
+    }
+
+    /// <summary>Hai lần gửi CÙNG một đơn cách nhau ít hơn chừng này giây được coi là gửi trùng.</summary>
+    private const int DuplicateOrderWindowSeconds = 60;
+
     public async Task<OrderMutationResponse> CreateOrderAsync(CreateOrderRequest request, CancellationToken cancellationToken)
     {
-        var orderId = Normalize(request.OrderId) ?? await GenerateOrderIdAsync(request.ConnectionType, cancellationToken);
+        // Mã đơn luôn do server sinh. Frontend tự đoán mã từ danh sách đơn nó đang có, nên
+        // khi danh sách đó thiếu đơn trong CSDL thì mã đoán ra bị trùng -> lỗi khoá chính,
+        // đơn không lưu được nhưng giao diện vẫn báo "thành công".
+        var orderId = await GenerateOrderIdAsync(request.ConnectionType, cancellationToken);
 
-        var email = Normalize(request.CustomerEmail);
-        var phone = Normalize(request.CustomerPhone);
+        var email = Normalize(request.CustomerEmail)?.ToLowerInvariant();
+        // Lưu số điện thoại dạng chỉ-có-chữ-số, giống lúc đăng ký tài khoản (/api/auth/register),
+        // để "0912 345 678" và "0912345678" không bị coi là hai số khác nhau.
+        var phone = NormalizePhone(request.CustomerPhone);
+        var customerName = Normalize(request.CustomerName) ?? "";
 
-        // Khách có thể đã có hồ sơ từ trước: đăng ký tài khoản ở trang /register,
-        // hoặc từng đặt đơn lần trước. Tìm lại theo email rồi tới số điện thoại để
-        // không sinh ra nhiều bản ghi Customer cho cùng một người.
+        // Khách có thể đã có hồ sơ từ trước (đăng ký ở /register, hoặc từng đặt đơn).
+        // Chỉ dùng lại hồ sơ khi CHẮC CHẮN là cùng một người:
+        //  - trùng email (email là định danh đăng nhập, mỗi email chỉ một tài khoản), hoặc
+        //  - không có email nhưng trùng CẢ số điện thoại lẫn họ tên.
+        // Trước đây chỉ cần trùng số điện thoại là gắn đơn vào hồ sơ cũ, nên khách mới
+        // khai tên khác mà dùng lại số cũ thì bên Kỹ thuật lại hiện tên/SĐT của người khác.
         Customer? customer = null;
         if (email is not null)
         {
             customer = await _context.Customers
                 .FirstOrDefaultAsync(c => c.Email == email, cancellationToken);
         }
-
-        if (customer is null && phone is not null)
+        else if (phone is not null && customerName.Length > 0)
         {
             customer = await _context.Customers
-                .FirstOrDefaultAsync(c => c.ContactNumber == phone, cancellationToken);
+                .FirstOrDefaultAsync(
+                    c => c.ContactNumber == phone && c.FullName == customerName,
+                    cancellationToken);
         }
 
         if (customer is null)
         {
             customer = new Customer
             {
-                CustomerId = $"CUST-{DateTime.UtcNow.Ticks.ToString().Substring(10)}",
-                FullName = request.CustomerName!,
-                ContactNumber = phone!,
+                CustomerId = await GenerateCustomerIdAsync(cancellationToken),
+                FullName = customerName,
+                ContactNumber = phone ?? "",
                 Email = email,
-                Address = request.InstallationAddress!,
-                IdProofType = request.IdProofType!,
-                IdProofNumber = request.IdProofNumber!,
+                Address = Normalize(request.InstallationAddress) ?? "",
+                IdProofType = Normalize(request.IdProofType) ?? "National ID Card",
+                IdProofNumber = Normalize(request.IdProofNumber) ?? "",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -381,21 +427,60 @@ public sealed class TechnicalOrderService
         }
         else
         {
-            // Hồ sơ tạo lúc đăng ký tài khoản chưa có địa chỉ và giấy tờ tuỳ thân —
-            // bổ sung từ đơn hàng này, nhưng không ghi đè dữ liệu khách đã khai trước đó.
-            if (string.IsNullOrWhiteSpace(customer.Address))
-                customer.Address = request.InstallationAddress!;
+            // Cùng một người đặt thêm đơn: thông tin vừa khai trên form là thông tin mới nhất,
+            // nên cập nhật lại họ tên và số điện thoại — nếu không, bên Kỹ thuật sẽ hiện
+            // dữ liệu cũ khác hẳn với những gì khách vừa nhập.
+            if (customerName.Length > 0)
+                customer.FullName = customerName;
 
+            if (phone is not null)
+                customer.ContactNumber = phone;
+
+            // Hồ sơ tạo lúc đăng ký tài khoản chưa có địa chỉ — bổ sung từ đơn hàng này.
+            if (string.IsNullOrWhiteSpace(customer.Address))
+                customer.Address = Normalize(request.InstallationAddress) ?? "";
+
+            // Lúc đăng ký, số giấy tờ tạm lấy bằng mã khách (CUST...); giấy tờ thật khai
+            // trên form đặt đơn thì thay vào.
             if (!string.IsNullOrWhiteSpace(request.IdProofType))
-                customer.IdProofType = request.IdProofType!;
+                customer.IdProofType = request.IdProofType.Trim();
 
             if (!string.IsNullOrWhiteSpace(request.IdProofNumber))
-                customer.IdProofNumber = request.IdProofNumber!;
+                customer.IdProofNumber = request.IdProofNumber.Trim();
 
             customer.UpdatedAt = DateTime.UtcNow;
         }
 
         var customerId = customer.CustomerId;
+
+        // Chống tạo trùng đơn: bấm đúp nút gửi, Enter + click, hay trình duyệt gửi lại request
+        // khi mạng chập chờn đều khiến CÙNG một đơn đi tới server 2 lần — khách nhận 2 đơn
+        // (số lượng 2 thành 4 kết nối cần lắp). Cùng khách, cùng gói, cùng chi nhánh, cùng địa
+        // chỉ và cùng số lượng trong vòng 60 giây thì trả lại đơn vừa tạo thay vì tạo thêm.
+        var bulkCount = Math.Max(1, request.BulkConnectionsCount);
+        var planId = request.PlanId ?? "default-plan";
+        var storeId = request.RetailOutletCode ?? "default-store";
+        var installationAddress = request.InstallationAddress ?? "";
+        var duplicateWindowStart = DateTime.UtcNow.AddSeconds(-DuplicateOrderWindowSeconds);
+
+        // Khớp theo mã khách HOẶC email: khách mới toanh gửi 2 request cùng lúc thì mỗi request
+        // tự sinh một mã khách khác nhau, chỉ email là giống nhau.
+        Task<Order?> FindJustCreatedAsync() => _context.Orders
+            .AsNoTracking()
+            .Where(o => (o.CustomerId == customerId || (email != null && o.Customer.Email == email))
+                        && o.PlanId == planId
+                        && o.StoreId == storeId
+                        && o.InstallationAddress == installationAddress
+                        && o.BulkConnectionsCount == bulkCount
+                        && o.CreatedAt >= duplicateWindowStart)
+            .OrderByDescending(o => o.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var justCreated = await FindJustCreatedAsync();
+        if (justCreated is not null)
+        {
+            return ToMutationResponse(justCreated);
+        }
 
         var order = new Order
         {
@@ -403,23 +488,38 @@ public sealed class TechnicalOrderService
             CustomerId = customerId,
             InstallationAddress = request.InstallationAddress ?? "",
             ApplicationDate = DateTime.UtcNow,
-            // Trạng thái lạ sẽ bị CK_Orders_Status chặn ở tầng CSDL -> quy về Pending cho an toàn.
-            Status = OrderStatuses.All.FirstOrDefault(
-                value => string.Equals(value, request.Status?.Trim(), StringComparison.OrdinalIgnoreCase))
-                ?? OrderStatuses.Pending,
-            PlanId = request.PlanId ?? "default-plan",
-            StoreId = request.RetailOutletCode ?? "default-store",
-            EmployeeId = request.AssignedEmployeeId,
+            // Mọi đơn mới đều phải qua bàn duyệt hồ sơ của chi nhánh trước, rồi mới tới
+            // bước phân công kỹ thuật viên — không tin trạng thái client gửi lên.
+            Status = OrderStatuses.PendingRetail,
+            PlanId = planId,
+            StoreId = storeId,
+            EmployeeId = Normalize(request.AssignedEmployeeId),
             // Server tự tính theo bậc bulk của spec — không tin con số client gửi.
-            BulkConnectionsCount = Math.Max(1, request.BulkConnectionsCount),
-            BulkDiscountPercent = BulkDiscounts.Compute(Math.Max(1, request.BulkConnectionsCount)),
+            BulkConnectionsCount = bulkCount,
+            BulkDiscountPercent = BulkDiscounts.Compute(bulkCount),
             ExistingLandlineAccountId = Normalize(request.ExistingLandlineAccountId),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
 
         _context.Orders.Add(order);
-        await _context.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // Hai request gửi CÙNG LÚC (bấm đúp cực nhanh) cùng sinh ra một mã đơn nên request
+            // đến sau đụng khoá chính. Đơn của request trước đã lưu — trả lại chính đơn đó
+            // thay vì báo lỗi 500. Không phải trường hợp trùng thì ném lỗi ra như bình thường.
+            _context.ChangeTracker.Clear();
+            var winner = await FindJustCreatedAsync();
+            if (winner is not null)
+            {
+                return ToMutationResponse(winner);
+            }
+            throw;
+        }
 
         // Gửi mã đơn hàng về email khách. Đơn đã lưu xong trước bước này, nên mail hỏng
         // cũng không làm mất đơn — EmailService tự nuốt lỗi và chỉ ghi log.
@@ -435,11 +535,22 @@ public sealed class TechnicalOrderService
 
         // Thông báo real-time cho khâu sẽ xử lý đơn này: bán lẻ nếu còn phải duyệt hồ sơ,
         // kỹ thuật nếu đơn vào thẳng hàng đợi khảo sát.
+        // Khách đã có mã tài khoản (đặt thêm gói trong cổng khách hàng) thì cũng nhận
+        // thông báo "đã tiếp nhận đơn" — lưu vào CSDL, không chỉ hiện tạm trên trình duyệt.
+        var customerAccountIds = await _context.CustomerConnections
+            .Where(c => c.Order.CustomerId == customer.CustomerId)
+            .Select(c => c.AccountId)
+            .Union(_context.Orders
+                .Where(o => o.CustomerId == customer.CustomerId && o.AssignedAccountId != null)
+                .Select(o => o.AssignedAccountId!))
+            .ToListAsync(cancellationToken);
+
         await _notifications.OrderPlacedAsync(
             order.OrderId,
             customer.FullName,
             Normalize(request.PlanName),
             needsRetailApproval: order.Status == OrderStatuses.PendingRetail,
+            customerAccountIds,
             cancellationToken);
 
         await _notifications.NotifyDataChangedAsync("orders", order.OrderId, cancellationToken);
@@ -472,6 +583,18 @@ public sealed class TechnicalOrderService
         if (order == null)
         {
             return ServiceResult<OrderMutationResponse>.NotFound("Không tìm thấy đơn hàng");
+        }
+
+        // Phân công kỹ thuật viên chỉ được làm sau khi chi nhánh đã duyệt hồ sơ.
+        var technicianName = Normalize(request.AssignedTechnician);
+        var technicianId = Normalize(request.AssignedTechnicianId);
+        var assigningTechnician = technicianName is not null || technicianId is not null;
+
+        if (assigningTechnician &&
+            (OrderStatuses.RetailStage.Contains(order.Status) || OrderStatuses.RetailStage.Contains(status)))
+        {
+            return ServiceResult<OrderMutationResponse>.Validation(
+                "Hồ sơ chưa được chi nhánh duyệt, chưa thể phân công kỹ thuật viên.");
         }
 
         var now = DateTime.UtcNow;
@@ -530,10 +653,7 @@ public sealed class TechnicalOrderService
         }
 
         // Phân công kỹ thuật viên đi khảo sát.
-        var technicianName = Normalize(request.AssignedTechnician);
-        var technicianId = Normalize(request.AssignedTechnicianId);
-
-        if (technicianName is not null || technicianId is not null)
+        if (assigningTechnician)
         {
             order.AssignedTechnicianName = technicianName ?? order.AssignedTechnicianName;
             order.AssignedTechnicianPhone = Normalize(request.AssignedTechnicianPhone)
@@ -642,8 +762,34 @@ public sealed class TechnicalOrderService
         order.ScheduledInstallDate,
         order.ApplicationDate,
         order.CreatedAt,
-        order.UpdatedAt);
+        order.UpdatedAt,
+        order.BulkConnectionsCount,
+        order.BulkDiscountPercent,
+        // Không đọc order.DepositWaived: cột tính toán chỉ có giá trị sau khi EF nạp lại
+        // từ CSDL, còn ở đây cùng một công thức cho kết quả ngay.
+        BulkDiscounts.IsDepositWaived(order.BulkConnectionsCount));
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>Chỉ giữ chữ số: "0912 345-678" -> "0912345678". Không còn số nào thì trả null.</summary>
+    private static string? NormalizePhone(string? value)
+    {
+        var digits = new string((value ?? "").Where(char.IsDigit).ToArray());
+        return digits.Length == 0 ? null : digits;
+    }
+
+    /// <summary>
+    /// Sinh mã khách cùng định dạng với lúc đăng ký tài khoản (CUS + 6 chữ số), có kiểm tra trùng.
+    /// Cách cũ lấy 8 chữ số cuối của Ticks nên hai đơn đặt cùng lúc có thể đụng khoá chính.
+    /// </summary>
+    private async Task<string> GenerateCustomerIdAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var candidate = $"CUS{Random.Shared.Next(100000, 999999)}";
+            if (!await _context.Customers.AnyAsync(c => c.CustomerId == candidate, cancellationToken))
+                return candidate;
+        }
+    }
 }

@@ -5,6 +5,7 @@ using doanki3API.Data;
 using doanki3API.DTOs.Connections;
 using doanki3API.Models;
 using doanki3API.Services.Common;
+using doanki3API.Services.Email;
 using doanki3API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,15 +16,18 @@ public sealed class ConnectionService
     private readonly MyAppDbContext _context;
     private readonly AccountIdGenerator _accountIdGenerator;
     private readonly NotificationService _notifications;
+    private readonly EmailService _email;
 
     public ConnectionService(
         MyAppDbContext context,
         AccountIdGenerator accountIdGenerator,
-        NotificationService notifications)
+        NotificationService notifications,
+        EmailService email)
     {
         _context = context;
         _accountIdGenerator = accountIdGenerator;
         _notifications = notifications;
+        _email = email;
     }
 
     public async Task<IReadOnlyList<ConnectionListItemResponse>> GetConnectionsAsync(
@@ -554,6 +558,23 @@ public sealed class ConnectionService
             cancellationToken);
 
         await _notifications.NotifyDataChangedAsync("connections", connection.AccountId, cancellationToken);
+
+        // Gửi Mã tài khoản cho khách ngay khi đấu nối xong — đây là mã để đăng nhập cổng
+        // khách hàng. Chạy nền: mail chậm/lỗi không được làm chậm hay hỏng thao tác kỹ thuật
+        // (EmailService tự nuốt lỗi và ghi log).
+        var customerEmail = order.Customer?.Email;
+        if (!string.IsNullOrWhiteSpace(customerEmail))
+        {
+            var customerName = string.IsNullOrWhiteSpace(order.Customer?.FullName)
+                ? "Quý khách"
+                : order.Customer!.FullName;
+            var mailAccountId = connection.AccountId;
+            var planName = order.Plan?.Name;
+            var provisionedOrderId = order.OrderId;
+
+            _ = Task.Run(() => _email.SendConnectionReadyAsync(
+                customerEmail, customerName, mailAccountId, provisionedOrderId, planName, CancellationToken.None));
+        }
 
         return ServiceResult<ProvideConnectionResponse>.Success(
             new ProvideConnectionResponse(

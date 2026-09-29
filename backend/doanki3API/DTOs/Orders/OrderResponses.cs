@@ -35,7 +35,13 @@ public sealed record OrderListItemResponse(
     string? AssignedTechnicianName,
     string? AssignedTechnicianPhone,
     DateTime? AssignedTechnicianDate,
-    string? EmployeeId);
+    string? EmployeeId,
+    // Giấy tờ tuỳ thân khách khai lúc đặt đơn — trước đây không trả về nên frontend
+    // Kỹ thuật phải gán cứng "National ID Card" với số rỗng.
+    string IdProofType,
+    string IdProofNumber,
+    // Đơn > 50 kết nối: miễn tiền cọc (cột tính toán Orders.DepositWaived).
+    bool DepositWaived);
 
 public sealed record OrderDetailResponse(
     string OrderId,
@@ -74,7 +80,8 @@ public sealed record OrderDetailResponse(
     string? RetailApprovalNotes,
     string? AssignedTechnicianName,
     string? AssignedTechnicianPhone,
-    DateTime? AssignedTechnicianDate);
+    DateTime? AssignedTechnicianDate,
+    bool DepositWaived);
 
 public sealed record OrderStatusResponse(
     string Message,
@@ -114,4 +121,7 @@ public sealed record OrderMutationResponse(
     DateTime? ScheduledInstallDate,
     DateTime ApplicationDate,
     DateTime CreatedAt,
-    DateTime? UpdatedAt);
+    DateTime? UpdatedAt,
+    int BulkConnectionsCount,
+    decimal BulkDiscountPercent,
+    bool DepositWaived);

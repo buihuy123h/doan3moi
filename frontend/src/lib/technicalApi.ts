@@ -86,6 +86,18 @@ export interface TechnicalOrderDto {
   bulkConnectionsCount: number;
   bulkDiscountPercent: number;
   existingLandlineAccountId?: string | null;
+  // Thông tin duyệt / phân công mà backend đã trả sẵn — trước đây bị bỏ qua khi map.
+  retailApprovedBy?: string | null;
+  retailApprovedDate?: string | null;
+  retailApprovalNotes?: string | null;
+  assignedTechnicianName?: string | null;
+  assignedTechnicianPhone?: string | null;
+  assignedTechnicianDate?: string | null;
+  employeeId?: string | null;
+  idProofType?: Order["idProofType"] | null;
+  idProofNumber?: string | null;
+  // Orders.DepositWaived: đơn > 50 kết nối được miễn tiền cọc.
+  depositWaived?: boolean | null;
 }
 
 export interface TechnicalConnectionDto {
@@ -183,7 +195,7 @@ export interface AdvancedSearchFilters {
 }
 
 export function searchOrdersAdvanced(filters: AdvancedSearchFilters = {}) {
-  return request<TechnicalOrderDto[]>(`/api/Technical/orders${queryString(filters)}`);
+  return request<TechnicalOrderDto[]>(`/api/Technical/orders${queryString(filters as Record<string, any>)}`);
 }
 
 export function getTechnicalOrders(filters: {
@@ -262,8 +274,9 @@ export async function loadTechnicalWorkspace(): Promise<TechnicalWorkspace> {
       customerPhone: item.customerPhone,
       customerEmail: item.customerEmail ?? "",
       installationAddress: item.installationAddress,
-      idProofType: "National ID Card",
-      idProofNumber: "",
+      // Lấy đúng giấy tờ khách đã khai (trước đây gán cứng "National ID Card" + số rỗng).
+      idProofType: item.idProofType ?? "National ID Card",
+      idProofNumber: item.idProofNumber ?? "",
       connectionType: item.connectionType,
       planId: item.planId,
       planName: item.planName,
@@ -281,9 +294,16 @@ export async function loadTechnicalWorkspace(): Promise<TechnicalWorkspace> {
       feasibilityCheckedDate: item.feasibilityCheckedDate ?? undefined,
       bulkConnectionsCount: Math.max(1, item.bulkConnectionsCount),
       bulkDiscountPercent: item.bulkDiscountPercent,
+      depositWaived: item.depositWaived ?? undefined,
       existingLandlineAccountId: item.existingLandlineAccountId ?? undefined,
       landlineFeasible: item.landlineFeasible ?? undefined,
       internetFeasible: item.internetFeasible ?? undefined,
+      retailApprovedBy: item.retailApprovedBy ?? undefined,
+      retailApprovedAt: item.retailApprovedDate ?? undefined,
+      retailApprovalNotes: item.retailApprovalNotes ?? undefined,
+      assignedTechnician: item.assignedTechnicianName ?? undefined,
+      assignedTechnicianPhone: item.assignedTechnicianPhone ?? undefined,
+      assignedTechnicianDate: item.assignedTechnicianDate ?? undefined,
     })),
     connections,
     equipments: equipmentDtos.map((item) => {

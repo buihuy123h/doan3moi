@@ -7,7 +7,7 @@
   import { languageStore } from '../context/LanguageContext';
   import LanguageToggle from '../components/layout/LanguageToggle.svelte';
   import { dashboardPathForRole, navigate, queryParam } from '../lib/router';
-  import { getBulkDiscountPercent } from '../context/NexusContext';
+  import { getBulkDiscountPercent, isDepositWaived, DEPOSIT_WAIVER_MIN_CONNECTIONS } from '../context/NexusContext';
   import type { Order } from '../types/nexus';
   import {
     Layers, Mail, User, Phone, ArrowRight, ArrowLeft, Sun, Moon, Sparkles,
@@ -104,13 +104,21 @@
   let hasExistingLandline = $state(false);
   let existingLandlineAccountId = $state('');
 
-  const bulkDiscountPercent = $derived(getBulkDiscountPercent(bulkConnectionsCount));
+  // Số kết nối thực sự gửi đi: khách cá nhân luôn 1, chỉ doanh nghiệp mới được đặt nhiều.
+  const effectiveBulkCount = $derived(
+    customerType === 'business' ? Math.max(1, bulkConnectionsCount || 1) : 1
+  );
+  const bulkDiscountPercent = $derived(getBulkDiscountPercent(effectiveBulkCount));
+  // Trên 50 kết nối: miễn hoàn toàn tiền cọc (lưu ở cột Orders.DepositWaived).
+  const depositWaived = $derived(isDepositWaived(effectiveBulkCount));
 
   // Set once the order goes through — switches the page to the receipt view.
   let placedOrder = $state<Order | null>(null);
 
   const activePlans = $derived($plans.filter((p) => p.status === 'Active'));
   const selectedPlan = $derived(activePlans.find((p) => p.id === planId) ?? null);
+  // Tiền cọc thực thu: 0 khi đơn được miễn cọc (> 50 kết nối).
+  const effectiveDeposit = $derived(depositWaived ? 0 : (selectedPlan?.securityDeposit ?? 0));
   const selectedShop = $derived($retailShops.find((s) => s.shopCode === shopCode) ?? null);
 
   // Already signed in? Send them to their own dashboard instead.
@@ -190,11 +198,11 @@
     const normalizedEmail = email.trim().toLowerCase();
 
     try {
-      // Bước 1 — tạo tài khoản đăng nhập cho khách. Backend tự hash mật khẩu và
-      // lưu hồ sơ Customer, nhờ vậy khách đăng nhập được ngay sau khi đăng ký.
-      // Backend trả kèm JWT role Customer: lưu vào localStorage để bước 2 ngay
-      // dưới đây (placeOrder → POST /api/Technical/orders) không bị chặn 401 —
-      // endpoint đó giờ yêu cầu [Authorize(Roles = ...)].
+      // Bước 1 — tạo tài khoản đăng nhập cho khách lần đầu. Backend tự hash mật khẩu và
+      // lưu hồ sơ Customer. Xoá JWT còn sót của phiên trước để không lẫn sang khách khác.
+      localStorage.removeItem('nexus_jwt_token');
+
+      let isReturningCustomer = false;
       try {
         const regRes = await registerCustomerApi({
           name: name.trim(),
@@ -206,19 +214,18 @@
           localStorage.setItem('nexus_jwt_token', regRes.token);
         }
       } catch (err) {
-        // 409 = email hoặc số điện thoại đã có tài khoản. Khách cũ đặt thêm đơn là
-        // chuyện bình thường nên vẫn cho đi tiếp, chỉ nhắc họ dùng mật khẩu cũ.
+        // 409 = email (hoặc số điện thoại) đã có tài khoản: đây là khách cũ mua thêm.
+        // Một người được mua nhiều lần và dùng lại email cũ — đơn mới được backend gắn
+        // vào đúng hồ sơ khách có sẵn theo email, không tạo tài khoản thứ hai.
         if (err instanceof ApiError && err.status === 409) {
-          toast.info($language === 'vi'
-            ? 'Email này đã có tài khoản — hãy đăng nhập bằng mật khẩu cũ của bạn.'
-            : 'This email already has an account — please sign in with your existing password.');
+          isReturningCustomer = true;
         } else {
           throw err;
         }
       }
 
-      // Bước 2 — ghi đơn đăng ký dịch vụ. placeOrder là hàm async, phải await,
-      // nếu không placedOrder sẽ nhận Promise và màn hình kết quả hiện mã đơn rỗng.
+      // Bước 2 — ghi đơn qua /api/public/orders (không cần JWT), nên khách cũ dùng lại
+      // email vẫn đặt được. Lỗi thật (thiếu dữ liệu, mất mạng...) sẽ ném ra và hiện lên form.
       placedOrder = await placeOrder({
         customerName: name.trim(),
         customerPhone: phone.trim(),
@@ -231,12 +238,17 @@
         planName: selectedPlan.name,
         retailOutletCode: selectedShop.shopCode,
         retailEmployeeName: 'Online Self-Service',
-        bulkConnectionsCount: customerType === 'business' ? Math.max(1, bulkConnectionsCount || 1) : 1,
+        bulkConnectionsCount: effectiveBulkCount,
         ...(selectedPlan.type === 'Dial-Up' && hasExistingLandline && existingLandlineAccountId.trim()
           ? { existingLandlineAccountId: existingLandlineAccountId.trim() }
           : {}),
-      });
+      }, { selfService: true });
 
+      if (isReturningCustomer) {
+        toast.info($language === 'vi'
+          ? `Email ${normalizedEmail} đã có tài khoản — đơn mới đã được thêm vào hồ sơ của bạn.`
+          : `${normalizedEmail} already has an account — this order was added to your profile.`);
+      }
       toast.success($t.auth.registerSuccess);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
@@ -404,6 +416,19 @@
               <div class="text-[#537292] dark:text-[#8DB0D4]">{$t.registrationPage.addressLabel}</div>
               <div class="font-bold text-[#0F1D2B] dark:text-white mt-0.5">{placedOrder.installationAddress}</div>
             </div>
+            {#if placedOrder.depositWaived}
+              <!-- Đơn trên 50 kết nối — CSDL đã ghi Orders.DepositWaived = 1 -->
+              <div class="sm:col-span-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
+                <div class="text-emerald-700 dark:text-emerald-300 font-extrabold">
+                  {$language === 'vi' ? 'Tiền cọc: MIỄN PHÍ' : 'Security deposit: FREE'}
+                </div>
+                <div class="text-[#537292] dark:text-[#8DB0D4] mt-0.5">
+                  {$language === 'vi'
+                    ? `Đơn ${placedOrder.bulkConnectionsCount} kết nối (trên ${DEPOSIT_WAIVER_MIN_CONNECTIONS}) được miễn toàn bộ tiền cọc.`
+                    : `${placedOrder.bulkConnectionsCount} connections (over ${DEPOSIT_WAIVER_MIN_CONNECTIONS}) — the full deposit is waived.`}
+                </div>
+              </div>
+            {/if}
           </div>
 
           <!-- Stage 1 notice: the order goes to the branch's retail desk first -->
@@ -842,20 +867,37 @@
                   </div>
                   <div class="flex items-center justify-between py-1">
                     <span class="text-[#537292] dark:text-[#8DB0D4]">{$t.registrationPage.depositLabel}</span>
-                    <span class="font-bold text-[#0F1D2B] dark:text-white">${selectedPlan.securityDeposit}</span>
+                    {#if depositWaived}
+                      <!-- Trên 50 kết nối: miễn tiền cọc — gạch giá gốc, hiện nhãn MIỄN PHÍ -->
+                      <span class="flex items-center gap-1.5">
+                        <span class="line-through text-[#8FAAC2]">${selectedPlan.securityDeposit}</span>
+                        <span class="px-1.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                          {$language === 'vi' ? 'Miễn phí' : 'Free'}
+                        </span>
+                      </span>
+                    {:else}
+                      <span class="font-bold text-[#0F1D2B] dark:text-white">${selectedPlan.securityDeposit}</span>
+                    {/if}
                   </div>
+                  {#if depositWaived}
+                    <div class="my-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
+                      {$language === 'vi'
+                        ? `Đơn ${effectiveBulkCount} kết nối (trên ${DEPOSIT_WAIVER_MIN_CONNECTIONS}) được MIỄN PHÍ tiền cọc.`
+                        : `${effectiveBulkCount} connections (over ${DEPOSIT_WAIVER_MIN_CONNECTIONS}) — security deposit is FREE.`}
+                    </div>
+                  {/if}
                   {#if bulkDiscountPercent > 0}
                     <div class="flex items-center justify-between py-1 text-emerald-600 dark:text-emerald-400">
-                      <span>{$language === 'vi' ? `Chiết khấu gói ${bulkConnectionsCount} kết nối` : `Bulk scheme (${bulkConnectionsCount} connections)`} −{bulkDiscountPercent}%</span>
+                      <span>{$language === 'vi' ? `Chiết khấu gói ${effectiveBulkCount} kết nối` : `Bulk scheme (${effectiveBulkCount} connections)`} −{bulkDiscountPercent}%</span>
                       <span class="font-bold">
-                        −${(((selectedPlan.monthlyRental + selectedPlan.securityDeposit) * bulkDiscountPercent) / 100).toFixed(2)}
+                        −${(((selectedPlan.monthlyRental + effectiveDeposit) * bulkDiscountPercent) / 100).toFixed(2)}
                       </span>
                     </div>
                   {/if}
                   <div class="flex items-center justify-between pt-2 mt-1 border-t border-sky-500/20">
                     <span class="font-bold text-[#305070] dark:text-slate-200">{$t.registrationPage.dueTodayLabel}</span>
                     <span class="font-black text-base text-sky-700 dark:text-sky-300">
-                      ${((selectedPlan.monthlyRental + selectedPlan.securityDeposit) * (1 - bulkDiscountPercent / 100)).toFixed(2)}
+                      ${((selectedPlan.monthlyRental + effectiveDeposit) * (1 - bulkDiscountPercent / 100)).toFixed(2)}
                     </span>
                   </div>
                 </div>

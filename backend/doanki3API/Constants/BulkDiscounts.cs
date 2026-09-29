@@ -10,9 +10,17 @@ namespace doanki3API.Constants;
 /// </summary>
 public static class BulkDiscounts
 {
+    /// <summary>
+    /// Trên mốc này (> 50 kết nối) đơn được miễn hoàn toàn tiền cọc. Phải khớp cột tính
+    /// toán Orders.DepositWaived trong CSDL và DEPOSIT_WAIVER_MIN_CONNECTIONS bên frontend.
+    /// </summary>
+    public const int DepositWaiverThreshold = 50;
+
+    public static bool IsDepositWaived(int connections) => connections > DepositWaiverThreshold;
+
     public static decimal Compute(int connections)
     {
-        if (connections > 50) return 100m;
+        if (IsDepositWaived(connections)) return 100m;
         if (connections >= 25) return 75m;
         if (connections >= 15) return 50m;
         if (connections >= 10) return 25m;

@@ -211,6 +211,13 @@ function createAuthStore() {
       };
 
       currentUser.set(user);
+
+      // Dữ liệu được tải lúc mở trang khi CHƯA có JWT nên các API bị 401 — khách mới đăng
+      // nhập xong không thấy hoá đơn/đường truyền của mình. Tải lại SAU khi đã đặt người
+      // dùng: hàm tải dựa vào vai trò 'user' để gọi đúng API hoá đơn của riêng khách.
+      // Các ô trong cổng khách hàng là $derived nên tự cập nhật khi dữ liệu về.
+      void nexusStore.syncWithDatabase();
+
       return { success: true as const, user };
     } catch (e) {
       if (e instanceof ApiError) {
@@ -270,6 +277,8 @@ function createAuthStore() {
       // Lưu JWT để đính kèm vào các request tới backend sau này (nếu có).
       if (res.token) {
         localStorage.setItem('nexus_jwt_token', res.token);
+        // Lần tải lúc mở trang chưa có token (401) — tải lại bằng token vừa nhận.
+        void nexusStore.syncWithDatabase();
       }
 
       const role = mapBackendRole(res.user.role);

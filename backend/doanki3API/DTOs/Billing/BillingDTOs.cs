@@ -49,6 +49,8 @@ public sealed record PaymentResponse(
 public sealed record BillResponse(
     string BillId,
     string InvoiceNumber,
+    // "Hóa đơn của cái gì" — mô tả gói cước, kỳ thanh toán và các khoản gồm trong hóa đơn.
+    string Description,
     string AccountId,
     string CustomerName,
     string CustomerPhone,

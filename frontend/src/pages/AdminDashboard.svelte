@@ -36,6 +36,10 @@
     ShieldCheck,
     Headset,
     ShoppingCart,
+    Clock,
+    XCircle,
+    PackageCheck,
+    Send,
   } from "lucide-svelte";
   import type {
     Employee,
@@ -44,6 +48,7 @@
     RetailShop,
     InventoryItem,
     PurchaseOrder,
+    EquipmentRequest,
   } from "../types/nexus";
   import { toast } from "svelte-sonner";
   import { queryParam, activeTabOverride } from "../lib/router";
@@ -68,6 +73,7 @@
   } from "../lib/api";
   import { authStore } from "../context/AuthContext";
   import { fly, fade } from "svelte/transition";
+  import Pagination from "../components/common/Pagination.svelte";
 
   type AdminTab =
     | "overview"
@@ -100,6 +106,10 @@
     addPurchaseOrder,
     setPurchaseOrderStatus,
     deletePurchaseOrder,
+    equipmentRequests,
+    refreshEquipmentRequests,
+    setEquipmentRequestStatus,
+    deleteEquipmentRequest,
     plans,
     addPlan,
     updatePlan,
@@ -146,6 +156,8 @@
   // Employee Search and Filter
   let employeeSearch = $state("");
   let employeeRoleFilter = $state("All");
+  let employeeCurrentPage = $state(1);
+  const employeeItemsPerPage = 8;
 
   // Employee Modal State
   let isEmployeeModalOpen = $state(false);
@@ -268,6 +280,33 @@
     respondingId = null;
     toast.success("Response sent to the customer.");
   };
+
+  // Feedback Pagination
+  let feedbackSearch = $state("");
+  let feedbackCurrentPage = $state(1);
+  const feedbackItemsPerPage = 5;
+  const filteredFeedbacks = $derived(
+    $feedbacks.filter((f) => {
+      if (!feedbackSearch.trim()) return true;
+      const q = feedbackSearch.toLowerCase();
+      return (
+        f.customerName.toLowerCase().includes(q) ||
+        f.message.toLowerCase().includes(q) ||
+        (f.accountId || "").toLowerCase().includes(q) ||
+        f.category.toLowerCase().includes(q)
+      );
+    })
+  );
+  const paginatedFeedbacks = $derived(
+    filteredFeedbacks.slice(
+      (feedbackCurrentPage - 1) * feedbackItemsPerPage,
+      feedbackCurrentPage * feedbackItemsPerPage
+    )
+  );
+  $effect(() => {
+    feedbackSearch;
+    feedbackCurrentPage = 1;
+  });
 
   // ---- Live Chat với khách (chatbox ở trang index) — dữ liệu thật từ API /api/chat ----
   const { currentUser } = authStore;
@@ -453,6 +492,34 @@
   // Retail Shop Modal State & Handlers
   let isShopModalOpen = $state(false);
   let editingShop = $state<RetailShop | null>(null);
+
+  // Retail Shop Search & Pagination
+  let shopSearch = $state("");
+  let shopCurrentPage = $state(1);
+  const shopItemsPerPage = 6;
+  const filteredShops = $derived(
+    $retailShops.filter((s) => {
+      if (!shopSearch.trim()) return true;
+      const q = shopSearch.toLowerCase();
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.shopCode.toLowerCase().includes(q) ||
+        s.city.toLowerCase().includes(q) ||
+        s.managerName.toLowerCase().includes(q)
+      );
+    })
+  );
+  const paginatedShops = $derived(
+    filteredShops.slice(
+      (shopCurrentPage - 1) * shopItemsPerPage,
+      shopCurrentPage * shopItemsPerPage
+    )
+  );
+  $effect(() => {
+    shopSearch;
+    shopCurrentPage = 1;
+  });
+
   let shopFormData = $state({
     shopCode: "",
     name: "",
@@ -863,6 +930,110 @@
     );
   };
 
+  // ===== Equipment Requests (Yêu cầu nhập hàng từ kỹ thuật viên) =====
+  let activePurchaseSubTab = $state<"requests" | "vendor-orders">("requests");
+  let adminRequestSearch = $state("");
+  let adminRequestStatusFilter = $state<"all" | EquipmentRequest["status"]>("all");
+  let isProcessingRequest = $state(false);
+
+  const filteredAdminRequests = $derived(
+    $equipmentRequests.filter((r) => {
+      if (adminRequestStatusFilter !== "all" && r.status !== adminRequestStatusFilter) return false;
+      if (!adminRequestSearch.trim()) return true;
+      const q = adminRequestSearch.toLowerCase();
+      return (
+        r.id.toLowerCase().includes(q) ||
+        r.itemName.toLowerCase().includes(q) ||
+        r.deviceType.toLowerCase().includes(q) ||
+        (r.storeName || "").toLowerCase().includes(q) ||
+        (r.employeeName || "").toLowerCase().includes(q) ||
+        (r.orderId || "").toLowerCase().includes(q) ||
+        (r.reason || "").toLowerCase().includes(q)
+      );
+    })
+  );
+
+  let adminRequestCurrentPage = $state(1);
+  const adminRequestItemsPerPage = 8;
+  const paginatedAdminRequests = $derived(
+    filteredAdminRequests.slice(
+      (adminRequestCurrentPage - 1) * adminRequestItemsPerPage,
+      adminRequestCurrentPage * adminRequestItemsPerPage
+    )
+  );
+  $effect(() => {
+    adminRequestSearch;
+    adminRequestStatusFilter;
+    adminRequestCurrentPage = 1;
+  });
+
+  async function handleFulfillRequest(req: EquipmentRequest) {
+    isProcessingRequest = true;
+    try {
+      await setEquipmentRequestStatus(
+        req.id,
+        "Fulfilled",
+        $language === "vi"
+          ? "Admin đã duyệt và xuất kho/nhập thiết bị về chi nhánh."
+          : "Admin approved and stocked items to the branch."
+      );
+      toast.success(
+        $language === "vi"
+          ? `Đã nhập kho ${req.quantity} × ${req.itemName} cho chi nhánh ${req.storeName || req.storeId}! Kỹ thuật viên có thể cấp thiết bị ngay.`
+          : `Restocked ${req.quantity} × ${req.itemName} to branch ${req.storeName || req.storeId}!`
+      );
+    } catch (err: any) {
+      toast.error(err?.message || "Lỗi khi nhập hàng");
+    } finally {
+      isProcessingRequest = false;
+    }
+  }
+
+  async function handleApproveRequest(req: EquipmentRequest) {
+    try {
+      await setEquipmentRequestStatus(req.id, "Approved", "Đã duyệt yêu cầu, đang chuẩn bị điều phối hàng.");
+      toast.success($language === "vi" ? `Đã duyệt yêu cầu #${req.id}.` : `Approved request #${req.id}.`);
+    } catch (err: any) {
+      toast.error(err?.message || "Lỗi duyệt yêu cầu");
+    }
+  }
+
+  async function handleRejectRequest(req: EquipmentRequest) {
+    const reason = prompt(
+      $language === "vi"
+        ? "Nhập lý do từ chối yêu cầu nhập hàng:"
+        : "Enter reason for rejecting equipment request:",
+      "Hiện tại chưa có kế hoạch nhập thêm mẫu thiết bị này."
+    );
+    if (reason === null) return;
+    try {
+      await setEquipmentRequestStatus(req.id, "Rejected", reason || "Từ chối bởi Admin");
+      toast.info($language === "vi" ? `Đã từ chối yêu cầu #${req.id}.` : `Rejected request #${req.id}.`);
+    } catch (err: any) {
+      toast.error(err?.message || "Lỗi từ chối yêu cầu");
+    }
+  }
+
+  function handleCreatePOFromRequest(req: EquipmentRequest) {
+    purchaseFormData.vendorId = $vendors[0]?.id ?? "";
+    purchaseFormData.storeId = req.storeId;
+    purchaseFormData.itemCode = req.inventoryId
+      ? ($inventory.find((i) => i.id === req.inventoryId)?.itemCode ?? "EQ-GEN")
+      : "EQ-GEN";
+    purchaseFormData.itemName = req.itemName;
+    purchaseFormData.category = req.deviceType.includes("Router")
+      ? "Router"
+      : req.deviceType.includes("ONT")
+      ? "Fiber ONT"
+      : "Modem";
+    purchaseFormData.quantity = req.quantity;
+    purchaseFormData.unitCost = 0;
+    purchaseFormData.expectedDate = "";
+    purchaseFormData.notes = `Đặt mua theo yêu cầu #${req.id} cho ${req.storeName || req.storeId} (Đơn hàng: ${req.orderId || "Bổ sung kho"})`;
+    activePurchaseSubTab = "vendor-orders";
+    showPurchaseModal = true;
+  }
+
   // ===== Purchase Orders (Purchase List — đặt mua thiết bị từ vendor) =====
   let purchaseSearch = $state("");
   let purchaseStatusFilter = $state<"all" | PurchaseOrder["status"]>("all");
@@ -882,6 +1053,20 @@
       );
     })
   );
+
+  let poCurrentPage = $state(1);
+  const poItemsPerPage = 8;
+  const paginatedPurchaseOrders = $derived(
+    filteredPurchaseOrders.slice(
+      (poCurrentPage - 1) * poItemsPerPage,
+      poCurrentPage * poItemsPerPage
+    )
+  );
+  $effect(() => {
+    purchaseSearch;
+    purchaseStatusFilter;
+    poCurrentPage = 1;
+  });
 
   const purchaseFormData = $state({
     vendorId: "",
@@ -1080,6 +1265,19 @@
     }),
   );
 
+  const paginatedEmployees = $derived(
+    filteredEmployees.slice(
+      (employeeCurrentPage - 1) * employeeItemsPerPage,
+      employeeCurrentPage * employeeItemsPerPage
+    )
+  );
+
+  $effect(() => {
+    employeeSearch;
+    employeeRoleFilter;
+    employeeCurrentPage = 1;
+  });
+
   const adminNavItems: NavItem[] = $derived([
     { id: "overview", label: $t.adminNav.overview, icon: TrendingUp },
     {
@@ -1108,9 +1306,15 @@
     },
     {
       id: "purchases",
-      label: $language === "vi" ? "Đơn đặt mua" : "Purchase Orders",
+      label: $language === "vi" ? "Đơn đặt mua & Nhập hàng" : "Purchases & Restock",
       icon: ShoppingCart,
-      badge: $purchaseOrders.filter((p) => p.status === "Submitted").length || undefined,
+      badge:
+        $equipmentRequests.filter((r) => r.status === "Pending").length +
+          $purchaseOrders.filter((p) => p.status === "Submitted").length ||
+        undefined,
+      badgeColor: $equipmentRequests.some((r) => r.status === "Pending")
+        ? "bg-rose-100 text-rose-800"
+        : "bg-amber-100 text-amber-800",
     },
     {
       id: "shops",
@@ -1532,7 +1736,7 @@
 
       <!-- Employee Box Grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {#each filteredEmployees as emp (emp.id)}
+        {#each paginatedEmployees as emp (emp.id)}
           <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm hover:shadow-md transition relative flex flex-col group">
             <!-- Header: Name and Status -->
             <div class="flex items-start justify-between mb-3">
@@ -1622,6 +1826,9 @@
           </div>
         {/each}
       </div>
+
+      <!-- Employee Pagination -->
+      <Pagination bind:currentPage={employeeCurrentPage} totalItems={filteredEmployees.length} pageSize={employeeItemsPerPage} />
     </div>
   {/if}
 
@@ -1673,6 +1880,42 @@
           </div>
         </div>
       </div>
+
+      <!-- Equipment Requests Alert Banner -->
+      {#if $equipmentRequests.filter((r) => r.status === "Pending").length > 0}
+        <div
+          class="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-500/10 border border-amber-200 dark:border-amber-900/50 shadow-xs"
+        >
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
+              <Truck class="h-5 w-5" />
+            </div>
+            <div>
+              <div class="text-xs font-bold text-amber-900 dark:text-amber-200">
+                {$language === "vi"
+                  ? `Có ${$equipmentRequests.filter((r) => r.status === "Pending").length} mặt hàng kỹ thuật viên đang yêu cầu nhập kho!`
+                  : `${$equipmentRequests.filter((r) => r.status === "Pending").length} equipment import requests from technicians pending!`}
+              </div>
+              <div class="text-[11px] text-amber-700 dark:text-amber-300">
+                {$language === "vi"
+                  ? "Kỹ thuật viên tại các chi nhánh cần thiết bị để hoàn tất cấp kết nối cho khách hàng."
+                  : "Technicians at branches need hardware units to complete customer connections."}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onclick={() => {
+              activeTab = "purchases";
+              activePurchaseSubTab = "requests";
+            }}
+            class="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+          >
+            {$language === "vi" ? "Xem mặt hàng cần nhập" : "Review & Restock"}
+            <ArrowUpRight class="h-3.5 w-3.5" />
+          </button>
+        </div>
+      {/if}
 
       <div
         class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
@@ -1817,30 +2060,10 @@
             </tbody>
           </table>
         </div>
-
-        <!-- Pagination Controls -->
-        <div class="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex flex-col sm:flex-row items-center justify-center gap-3 text-sm">
-          <div class="flex items-center space-x-2">
-            <button
-              disabled={stockCurrentPage === 1}
-              onclick={() => stockCurrentPage--}
-              class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition text-slate-600 dark:text-slate-300 font-medium"
-            >
-              {$language === "vi" ? "Trước" : "Prev"}
-            </button>
-            <span class="px-3 py-1.5 font-medium text-slate-700 dark:text-slate-300">
-              {stockCurrentPage} / {totalStockPages}
-            </span>
-            <button
-              disabled={stockCurrentPage >= totalStockPages}
-              onclick={() => stockCurrentPage++}
-              class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition text-slate-600 dark:text-slate-300 font-medium"
-            >
-              {$language === "vi" ? "Sau" : "Next"}
-            </button>
-          </div>
-        </div>
       </div>
+
+      <!-- Pagination Controls (Bên ngoài bảng) -->
+      <Pagination bind:currentPage={stockCurrentPage} totalItems={filteredStock.length} pageSize={stockItemsPerPage} />
     </div>
   {/if}
 
@@ -1954,175 +2177,374 @@
             </tbody>
           </table>
         </div>
-
-        <!-- Pagination Controls -->
-        <div class="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex flex-col sm:flex-row items-center justify-center gap-3 text-sm">
-          <div class="flex items-center space-x-2">
-            <button
-              disabled={vendorCurrentPage === 1}
-              onclick={() => vendorCurrentPage--}
-              class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition text-slate-600 dark:text-slate-300 font-medium"
-            >
-              {$language === "vi" ? "Trước" : "Prev"}
-            </button>
-            <span class="px-3 py-1.5 font-medium text-slate-700 dark:text-slate-300">
-              {vendorCurrentPage} / {totalVendorPages}
-            </span>
-            <button
-              disabled={vendorCurrentPage >= totalVendorPages}
-              onclick={() => vendorCurrentPage++}
-              class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition text-slate-600 dark:text-slate-300 font-medium"
-            >
-              {$language === "vi" ? "Sau" : "Next"}
-            </button>
-          </div>
-        </div>
       </div>
+
+      <!-- Pagination Controls (Bên ngoài bảng) -->
+      <Pagination bind:currentPage={vendorCurrentPage} totalItems={filteredVendors.length} pageSize={vendorItemsPerPage} />
     </div>
   {/if}
 
-  <!-- TAB 5: RETAIL SHOPS -->
   <!-- TAB: PURCHASE ORDERS (Purchase List — đặt mua thiết bị từ vendor) -->
   {#if activeTab === "purchases"}
     <div class="space-y-6">
-      <div
-        class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
-      >
-        <div
-          class="p-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row gap-3 items-center justify-between"
+      <!-- Sub-Tabs Switcher: Yêu cầu nhập hàng từ KTV vs Đơn đặt mua NCC -->
+      <div class="flex items-center gap-2 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl w-fit border border-slate-200 dark:border-slate-700/60 shadow-xs">
+        <button
+          type="button"
+          onclick={() => (activePurchaseSubTab = "requests")}
+          class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer {activePurchaseSubTab === 'requests'
+            ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}"
         >
-          <div class="flex flex-1 items-center gap-3 w-full sm:w-auto">
-            <div class="relative flex-1 max-w-md">
-              <Search class="absolute left-3 top-2 h-4 w-4 text-slate-400" />
-              <input
-                type="text"
-                bind:value={purchaseSearch}
-                placeholder={$language === "vi"
-                  ? "Tìm mã đơn, vật tư, nhà cung cấp..."
-                  : "Search by PO #, item, vendor..."}
-                class="w-full pl-9 pr-4 py-1.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <select
-              bind:value={purchaseStatusFilter}
-              class="text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[170px]"
-            >
-              <option value="all">{$language === "vi" ? "Tất cả trạng thái" : "All Statuses"}</option>
-              <option value="Submitted">{$language === "vi" ? "Đã gửi" : "Submitted"}</option>
-              <option value="Received">{$language === "vi" ? "Đã nhận hàng" : "Received"}</option>
-              <option value="Cancelled">{$language === "vi" ? "Đã hủy" : "Cancelled"}</option>
-            </select>
-          </div>
-          <button
-            onclick={handleOpenPurchaseModal}
-            class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-sm font-bold transition shadow-sm"
+          <Truck class="h-4 w-4" />
+          <span>{$language === "vi" ? "Mặt hàng Kỹ thuật viên yêu cầu nhập" : "Technician Import Requests"}</span>
+          {#if $equipmentRequests.filter((r) => r.status === "Pending").length > 0}
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse">
+              {$equipmentRequests.filter((r) => r.status === "Pending").length}
+            </span>
+          {/if}
+        </button>
+
+        <button
+          type="button"
+          onclick={() => (activePurchaseSubTab = "vendor-orders")}
+          class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer {activePurchaseSubTab === 'vendor-orders'
+            ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}"
+        >
+          <ShoppingCart class="h-4 w-4" />
+          <span>{$language === "vi" ? "Đơn đặt mua từ Vendor (PO)" : "Vendor Purchase Orders"}</span>
+          {#if $purchaseOrders.filter((p) => p.status === "Submitted").length > 0}
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500 text-white">
+              {$purchaseOrders.filter((p) => p.status === "Submitted").length}
+            </span>
+          {/if}
+        </button>
+      </div>
+
+      {#if activePurchaseSubTab === "requests"}
+        <!-- CARD: YÊU CẦU NHẬP HÀNG TỪ KỸ THUẬT VIÊN -->
+        <div
+          class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
+        >
+          <div
+            class="p-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row gap-3 items-center justify-between"
           >
-            <Plus class="h-4 w-4" />
-            {$language === "vi" ? "Tạo đơn đặt mua" : "New Purchase Order"}
-          </button>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-sm">
-            <thead
-              class="bg-slate-50 dark:bg-slate-800/60 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-800"
-            >
-              <tr>
-                <th class="px-4 py-3">{$language === "vi" ? "Mã đơn" : "PO #"}</th>
-                <th class="px-4 py-3">{$language === "vi" ? "Vật tư" : "Item"}</th>
-                <th class="px-4 py-3">{$language === "vi" ? "Nhà cung cấp" : "Vendor"}</th>
-                <th class="px-4 py-3">{$language === "vi" ? "Chi nhánh nhận" : "Ship To"}</th>
-                <th class="px-4 py-3 text-center">{$language === "vi" ? "SL" : "Qty"}</th>
-                <th class="px-4 py-3 text-right">{$language === "vi" ? "Đơn giá" : "Unit Cost"}</th>
-                <th class="px-4 py-3 text-right">{$language === "vi" ? "Tổng tiền" : "Total"}</th>
-                <th class="px-4 py-3">{$language === "vi" ? "Đặt ngày / Dự kiến nhận" : "Ordered / Expected"}</th>
-                <th class="px-4 py-3 text-center">{$language === "vi" ? "Trạng thái" : "Status"}</th>
-                <th class="px-4 py-3 text-right">{$language === "vi" ? "Thao tác" : "Actions"}</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-              {#if filteredPurchaseOrders.length > 0}
-                {#each filteredPurchaseOrders as po (po.id)}
-                  <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
-                    <td class="px-4 py-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">{po.id}</td>
-                    <td class="px-4 py-3">
-                      <div class="font-semibold text-slate-900 dark:text-white">{po.itemName}</div>
-                      <div class="text-xs font-mono text-slate-500">{po.itemCode} · {po.category}</div>
-                    </td>
-                    <td class="px-4 py-3 text-slate-700 dark:text-slate-300">{po.vendorName || po.vendorId}</td>
-                    <td class="px-4 py-3 text-slate-700 dark:text-slate-300">
-                      {po.storeId
-                        ? ($retailShops.find((s) => s.id === po.storeId)?.name ?? po.storeId)
-                        : ($language === "vi" ? "Kho trung tâm" : "Central Warehouse")}
-                    </td>
-                    <td class="px-4 py-3 text-center font-mono">{po.quantity}</td>
-                    <td class="px-4 py-3 text-right font-mono">${po.unitCost.toFixed(2)}</td>
-                    <td class="px-4 py-3 text-right font-mono font-bold">${po.totalCost.toFixed(2)}</td>
-                    <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
-                      <div>{po.orderDate}</div>
-                      <div class="text-slate-400">{po.expectedDate ?? "—"}</div>
-                    </td>
-                    <td class="px-4 py-3 text-center">
-                      {#if po.status === "Received"}
-                        <span class="inline-flex px-2 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                          {$language === "vi" ? "Đã nhận" : "Received"}
-                        </span>
-                      {:else if po.status === "Cancelled"}
-                        <span class="inline-flex px-2 py-0.5 text-[11px] font-bold rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                          {$language === "vi" ? "Đã hủy" : "Cancelled"}
-                        </span>
-                      {:else}
-                        <span class="inline-flex px-2 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                          {$language === "vi" ? "Chờ hàng" : "Submitted"}
-                        </span>
-                      {/if}
-                    </td>
-                    <td class="px-4 py-3">
-                      <div class="flex items-center justify-end gap-1.5">
-                        {#if po.status === "Submitted"}
-                          <button
-                            onclick={() => handleReceivePurchase(po)}
-                            class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 transition"
-                            title={$language === "vi" ? "Xác nhận đã nhận hàng (tự cộng kho)" : "Mark received (auto-restock)"}
-                          >
+            <div class="flex flex-1 items-center gap-3 w-full sm:w-auto">
+              <div class="relative flex-1 max-w-md">
+                <Search class="absolute left-3 top-2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  bind:value={adminRequestSearch}
+                  placeholder={$language === "vi"
+                    ? "Tìm mã yêu cầu, mặt hàng, chi nhánh, KTV..."
+                    : "Search requests, items, branch, technician..."}
+                  class="w-full pl-9 pr-4 py-1.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <select
+                bind:value={adminRequestStatusFilter}
+                class="text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500 max-w-[170px]"
+              >
+                <option value="all">{$language === "vi" ? "Tất cả trạng thái" : "All Statuses"}</option>
+                <option value="Pending">{$language === "vi" ? "Cần nhập hàng" : "Pending"}</option>
+                <option value="Approved">{$language === "vi" ? "Đã duyệt" : "Approved"}</option>
+                <option value="Fulfilled">{$language === "vi" ? "Đã nhập kho" : "Fulfilled"}</option>
+                <option value="Rejected">{$language === "vi" ? "Từ chối" : "Rejected"}</option>
+              </select>
+            </div>
+            <div class="text-xs text-slate-500 font-medium">
+              {$language === "vi"
+                ? `Hiển thị ${filteredAdminRequests.length} yêu cầu mặt hàng`
+                : `Showing ${filteredAdminRequests.length} item requests`}
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead
+                class="bg-slate-50 dark:bg-slate-800/60 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-800"
+              >
+                <tr>
+                  <th class="px-4 py-3">{$language === "vi" ? "Mã yêu cầu" : "Req #"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Mặt hàng cần nhập" : "Item to Restock"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Chi nhánh cần" : "Destination Branch"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "KTV yêu cầu" : "Technician"}</th>
+                  <th class="px-4 py-3 text-center">{$language === "vi" ? "SL" : "Qty"}</th>
+                  <th class="px-4 py-3 text-center">{$language === "vi" ? "Ưu tiên" : "Urgency"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Đơn liên quan / Lý do" : "Order / Reason"}</th>
+                  <th class="px-4 py-3 text-center">{$language === "vi" ? "Trạng thái" : "Status"}</th>
+                  <th class="px-4 py-3 text-right">{$language === "vi" ? "Thao tác nhập hàng" : "Restock Action"}</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                {#if filteredAdminRequests.length > 0}
+                  {#each paginatedAdminRequests as req (req.id)}
+                    <tr class="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition">
+                      <td class="px-4 py-3 font-mono font-bold text-amber-600 dark:text-amber-400">
+                        {req.id}
+                        <div class="text-[10px] text-slate-400 font-normal">{req.createdAt.slice(0, 10)}</div>
+                      </td>
+                      <td class="px-4 py-3">
+                        <div class="font-semibold text-slate-900 dark:text-white">{req.itemName}</div>
+                        <div class="text-xs text-slate-500">{req.deviceType}</div>
+                      </td>
+                      <td class="px-4 py-3 text-slate-700 dark:text-slate-300">
+                        <div class="font-medium">{req.storeName || req.storeId}</div>
+                      </td>
+                      <td class="px-4 py-3 text-slate-700 dark:text-slate-300">
+                        <div class="text-xs font-medium">{req.employeeName || req.employeeId}</div>
+                      </td>
+                      <td class="px-4 py-3 text-center font-mono font-bold text-slate-900 dark:text-white text-base">
+                        {req.quantity}
+                      </td>
+                      <td class="px-4 py-3 text-center">
+                        {#if req.urgency === "Urgent"}
+                          <span class="inline-flex px-2 py-0.5 text-[10px] font-bold rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                            {$language === "vi" ? "Khẩn cấp" : "Urgent"}
+                          </span>
+                        {:else if req.urgency === "High"}
+                          <span class="inline-flex px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            {$language === "vi" ? "Cao" : "High"}
+                          </span>
+                        {:else}
+                          <span class="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                            {$language === "vi" ? "Bình thường" : "Normal"}
+                          </span>
+                        {/if}
+                      </td>
+                      <td class="px-4 py-3 max-w-[220px]">
+                        {#if req.orderId}
+                          <div class="font-mono text-indigo-600 dark:text-indigo-400 font-semibold text-xs mb-0.5">
+                            #{req.orderId}
+                          </div>
+                        {/if}
+                        <div class="text-xs text-slate-600 dark:text-slate-400 truncate" title={req.reason || ""}>
+                          {req.reason || "—"}
+                        </div>
+                      </td>
+                      <td class="px-4 py-3 text-center">
+                        {#if req.status === "Fulfilled"}
+                          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-bold rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
                             <CheckCircle2 class="h-3.5 w-3.5" />
-                            {$language === "vi" ? "Nhận hàng" : "Receive"}
-                          </button>
-                          <button
-                            onclick={() => handleCancelPurchase(po)}
-                            class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 transition"
-                          >
-                            {$language === "vi" ? "Hủy" : "Cancel"}
-                          </button>
+                            {$language === "vi" ? "Đã nhập hàng" : "Fulfilled"}
+                          </span>
+                        {:else if req.status === "Approved"}
+                          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-bold rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                            <CheckCircle2 class="h-3.5 w-3.5" />
+                            {$language === "vi" ? "Đã duyệt" : "Approved"}
+                          </span>
+                        {:else if req.status === "Rejected"}
+                          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-bold rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                            <XCircle class="h-3.5 w-3.5" />
+                            {$language === "vi" ? "Từ chối" : "Rejected"}
+                          </span>
+                        {:else}
+                          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-bold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 animate-pulse">
+                            <Clock class="h-3.5 w-3.5" />
+                            {$language === "vi" ? "Cần nhập hàng" : "Pending"}
+                          </span>
                         {/if}
-                        {#if po.status !== "Received"}
-                          <button
-                            onclick={() => handleDeletePurchase(po)}
-                            class="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-100 hover:text-rose-600 dark:hover:bg-rose-900/40 dark:hover:text-rose-400 transition"
-                            title={$language === "vi" ? "Xóa đơn mua" : "Delete PO"}
-                          >
-                            <Trash2 class="h-4 w-4" />
-                          </button>
-                        {/if}
-                      </div>
+                      </td>
+                      <td class="px-4 py-3 text-right">
+                        <div class="flex items-center justify-end gap-1.5">
+                          {#if req.status !== "Fulfilled" && req.status !== "Rejected"}
+                            <button
+                              onclick={() => handleFulfillRequest(req)}
+                              disabled={isProcessingRequest}
+                              class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition cursor-pointer"
+                              title={$language === "vi" ? "Nhập thiết bị vào kho chi nhánh và hoàn tất yêu cầu" : "Restock items to branch inventory"}
+                            >
+                              <PackageCheck class="h-3.5 w-3.5" />
+                              {$language === "vi" ? "Nhập hàng ngay" : "Restock Now"}
+                            </button>
+                            {#if req.status === "Pending"}
+                              <button
+                                onclick={() => handleApproveRequest(req)}
+                                class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 transition cursor-pointer"
+                              >
+                                {$language === "vi" ? "Duyệt" : "Approve"}
+                              </button>
+                            {/if}
+                            <button
+                              onclick={() => handleCreatePOFromRequest(req)}
+                              class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 transition cursor-pointer"
+                              title={$language === "vi" ? "Tạo đơn PO đặt mua từ Vendor cho mặt hàng này" : "Create PO with Vendor"}
+                            >
+                              {$language === "vi" ? "Đặt Vendor" : "PO Vendor"}
+                            </button>
+                            <button
+                              onclick={() => handleRejectRequest(req)}
+                              class="px-2 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-rose-100 hover:text-rose-600 transition cursor-pointer"
+                            >
+                              {$language === "vi" ? "Từ chối" : "Reject"}
+                            </button>
+                          {:else}
+                            <span class="text-xs text-slate-400">
+                              {req.adminNotes || ($language === "vi" ? "Đã xử lý" : "Completed")}
+                            </span>
+                          {/if}
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                {:else}
+                  <tr>
+                    <td colspan="9" class="px-4 py-12 text-center text-slate-400 text-xs">
+                      <Truck class="h-8 w-8 mx-auto mb-2 opacity-40" />
+                      {$language === "vi"
+                        ? "Không có yêu cầu nhập hàng nào cần xử lý."
+                        : "No equipment import requests from technicians."}
                     </td>
                   </tr>
-                {/each}
-              {:else}
-                <tr>
-                  <td colspan="10" class="px-4 py-8 text-center text-slate-500 text-xs">
-                    <ShoppingCart class="h-8 w-8 mx-auto text-slate-400 mb-2" />
-                    <p>
-                      {$language === "vi"
-                        ? "Chưa có đơn đặt mua nào — tạo đơn để nhập thiết bị từ vendor."
-                        : "No purchase orders yet — create one to restock equipment from a vendor."}
-                    </p>
-                  </td>
-                </tr>
-              {/if}
-            </tbody>
-          </table>
+                {/if}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+        <Pagination bind:currentPage={adminRequestCurrentPage} totalItems={filteredAdminRequests.length} pageSize={adminRequestItemsPerPage} />
+      {:else}
+        <!-- CARD: ĐƠN ĐẶT MUA TỪ VENDOR -->
+        <div
+          class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
+        >
+          <div
+            class="p-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row gap-3 items-center justify-between"
+          >
+            <div class="flex flex-1 items-center gap-3 w-full sm:w-auto">
+              <div class="relative flex-1 max-w-md">
+                <Search class="absolute left-3 top-2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  bind:value={purchaseSearch}
+                  placeholder={$language === "vi"
+                    ? "Tìm mã đơn, vật tư, nhà cung cấp..."
+                    : "Search by PO #, item, vendor..."}
+                  class="w-full pl-9 pr-4 py-1.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <select
+                bind:value={purchaseStatusFilter}
+                class="text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[170px]"
+              >
+                <option value="all">{$language === "vi" ? "Tất cả trạng thái" : "All Statuses"}</option>
+                <option value="Submitted">{$language === "vi" ? "Đã gửi" : "Submitted"}</option>
+                <option value="Received">{$language === "vi" ? "Đã nhận hàng" : "Received"}</option>
+                <option value="Cancelled">{$language === "vi" ? "Đã hủy" : "Cancelled"}</option>
+              </select>
+            </div>
+            <button
+              onclick={handleOpenPurchaseModal}
+              class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-sm font-bold transition shadow-sm"
+            >
+              <Plus class="h-4 w-4" />
+              {$language === "vi" ? "Tạo đơn đặt mua" : "New Purchase Order"}
+            </button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead
+                class="bg-slate-50 dark:bg-slate-800/60 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-800"
+              >
+                <tr>
+                  <th class="px-4 py-3">{$language === "vi" ? "Mã đơn" : "PO #"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Vật tư" : "Item"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Nhà cung cấp" : "Vendor"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Chi nhánh nhận" : "Ship To"}</th>
+                  <th class="px-4 py-3 text-center">{$language === "vi" ? "SL" : "Qty"}</th>
+                  <th class="px-4 py-3 text-right">{$language === "vi" ? "Đơn giá" : "Unit Cost"}</th>
+                  <th class="px-4 py-3 text-right">{$language === "vi" ? "Tổng tiền" : "Total"}</th>
+                  <th class="px-4 py-3">{$language === "vi" ? "Đặt ngày / Dự kiến nhận" : "Ordered / Expected"}</th>
+                  <th class="px-4 py-3 text-center">{$language === "vi" ? "Trạng thái" : "Status"}</th>
+                  <th class="px-4 py-3 text-right">{$language === "vi" ? "Thao tác" : "Actions"}</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                {#if filteredPurchaseOrders.length > 0}
+                  {#each paginatedPurchaseOrders as po (po.id)}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
+                      <td class="px-4 py-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">{po.id}</td>
+                      <td class="px-4 py-3">
+                        <div class="font-semibold text-slate-900 dark:text-white">{po.itemName}</div>
+                        <div class="text-xs font-mono text-slate-500">{po.itemCode} · {po.category}</div>
+                      </td>
+                      <td class="px-4 py-3 text-slate-700 dark:text-slate-300">{po.vendorName || po.vendorId}</td>
+                      <td class="px-4 py-3 text-slate-700 dark:text-slate-300">
+                        {po.storeId
+                          ? ($retailShops.find((s) => s.id === po.storeId)?.name ?? po.storeId)
+                          : ($language === "vi" ? "Kho trung tâm" : "Central Warehouse")}
+                      </td>
+                      <td class="px-4 py-3 text-center font-mono">{po.quantity}</td>
+                      <td class="px-4 py-3 text-right font-mono">${po.unitCost.toFixed(2)}</td>
+                      <td class="px-4 py-3 text-right font-mono font-bold">${po.totalCost.toFixed(2)}</td>
+                      <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+                        <div>{po.orderDate}</div>
+                        <div class="text-slate-400">{po.expectedDate ?? "—"}</div>
+                      </td>
+                      <td class="px-4 py-3 text-center">
+                        {#if po.status === "Received"}
+                          <span class="inline-flex px-2 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                            {$language === "vi" ? "Đã nhận" : "Received"}
+                          </span>
+                        {:else if po.status === "Cancelled"}
+                          <span class="inline-flex px-2 py-0.5 text-[11px] font-bold rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                            {$language === "vi" ? "Đã hủy" : "Cancelled"}
+                          </span>
+                        {:else}
+                          <span class="inline-flex px-2 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            {$language === "vi" ? "Chờ hàng" : "Submitted"}
+                          </span>
+                        {/if}
+                      </td>
+                      <td class="px-4 py-3">
+                        <div class="flex items-center justify-end gap-1.5">
+                          {#if po.status === "Submitted"}
+                            <button
+                              onclick={() => handleReceivePurchase(po)}
+                              class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 transition"
+                              title={$language === "vi" ? "Xác nhận đã nhận hàng (tự cộng kho)" : "Mark received (auto-restock)"}
+                            >
+                              <CheckCircle2 class="h-3.5 w-3.5" />
+                              {$language === "vi" ? "Nhận hàng" : "Receive"}
+                            </button>
+                            <button
+                              onclick={() => handleCancelPurchase(po)}
+                              class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 transition"
+                            >
+                              {$language === "vi" ? "Hủy" : "Cancel"}
+                            </button>
+                          {/if}
+                          {#if po.status !== "Received"}
+                            <button
+                              onclick={() => handleDeletePurchase(po)}
+                              class="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-100 hover:text-rose-600 dark:hover:bg-rose-900/40 dark:hover:text-rose-400 transition"
+                              title={$language === "vi" ? "Xóa đơn mua" : "Delete PO"}
+                            >
+                              <Trash2 class="h-4 w-4" />
+                            </button>
+                          {/if}
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                {:else}
+                  <tr>
+                    <td colspan="10" class="px-4 py-8 text-center text-slate-500 text-xs">
+                      <ShoppingCart class="h-8 w-8 mx-auto text-slate-400 mb-2" />
+                      <p>
+                        {$language === "vi"
+                          ? "Chưa có đơn đặt mua nào — tạo đơn để nhập thiết bị từ vendor."
+                          : "No purchase orders yet — create one to restock equipment from a vendor."}
+                      </p>
+                    </td>
+                  </tr>
+                {/if}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <Pagination bind:currentPage={poCurrentPage} totalItems={filteredPurchaseOrders.length} pageSize={poItemsPerPage} />
+      {/if}
     </div>
   {/if}
 
@@ -2259,7 +2681,7 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {#each $retailShops as shop (shop.id)}
+        {#each paginatedShops as shop (shop.id)}
           <div
             class="group relative rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm hover:shadow-xl hover:shadow-blue-500/10 hover:border-blue-400/50 dark:hover:border-blue-500/50 transition-all duration-300 overflow-hidden flex flex-col justify-between"
           >
@@ -2373,6 +2795,7 @@
           </div>
         {/each}
       </div>
+      <Pagination bind:currentPage={shopCurrentPage} totalItems={filteredShops.length} pageSize={shopItemsPerPage} />
     </div>
   {/if}
 
@@ -2531,30 +2954,10 @@
             </tbody>
           </table>
         </div>
-
-        <!-- Pagination Controls -->
-        <div class="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex flex-col sm:flex-row items-center justify-center gap-3 text-sm">
-          <div class="flex items-center space-x-2">
-            <button
-              disabled={planCurrentPage === 1}
-              onclick={() => planCurrentPage--}
-              class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition text-slate-600 dark:text-slate-300 font-medium"
-            >
-              {$language === "vi" ? "Trước" : "Prev"}
-            </button>
-            <span class="px-3 py-1.5 font-medium text-slate-700 dark:text-slate-300">
-              {planCurrentPage} / {totalPlanPages}
-            </span>
-            <button
-              disabled={planCurrentPage >= totalPlanPages}
-              onclick={() => planCurrentPage++}
-              class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition text-slate-600 dark:text-slate-300 font-medium"
-            >
-              {$language === "vi" ? "Sau" : "Next"}
-            </button>
-          </div>
-        </div>
       </div>
+
+      <!-- Pagination Controls (Bên ngoài bảng) -->
+      <Pagination bind:currentPage={planCurrentPage} totalItems={filteredPlans.length} pageSize={planItemsPerPage} />
     </div>
   {/if}
 
@@ -2777,7 +3180,7 @@
             : "No customer feedback collected yet."}
         </div>
       {/if}
-      {#each $feedbacks as f (f.id)}
+      {#each paginatedFeedbacks as f (f.id)}
         <div
           class="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-2"
         >
@@ -2853,6 +3256,7 @@
           {/if}
         </div>
       {/each}
+      <Pagination bind:currentPage={feedbackCurrentPage} totalItems={filteredFeedbacks.length} pageSize={feedbackItemsPerPage} />
     </div>
   {/if}
 

@@ -24,22 +24,27 @@ public static class NotificationEvents
     }
 
     // ---- 1. Khách đặt đơn mới ----
-    // Đơn cần duyệt giấy tờ (PendingRetail) thì báo cho cửa hàng bán lẻ; đơn đặt trực tuyến
-    // vào thẳng trạng thái Pending nên phải báo cho Kỹ thuật — đúng nơi đơn thực sự nằm.
+    // Đơn mới luôn nằm ở PendingRetail nên báo cho cửa hàng bán lẻ (trang Duyệt hồ sơ
+    // chi nhánh); nhánh báo Kỹ thuật chỉ còn giữ lại cho trường hợp đơn đã qua duyệt.
+    //
+    // Ngoài khâu xử lý, còn báo cho:
+    //  - Quản trị: theo dõi toàn hệ thống (trỏ về trang Tổng quan của Admin, không bắt đổi vai trò).
+    //  - Chính khách hàng: nếu khách đã có mã tài khoản (đặt thêm gói trong cổng khách hàng)
+    //    thì lưu một thông báo "đã tiếp nhận đơn" vào CSDL cho từng mã tài khoản của họ.
     public static Task OrderPlacedAsync(
         this NotificationService notifications,
         string orderId,
         string customerName,
         string? planName,
         bool needsRetailApproval,
+        IReadOnlyCollection<string>? customerAccountIds = null,
         CancellationToken ct = default)
     {
         var planVi = string.IsNullOrWhiteSpace(planName) ? "." : $" — gói {planName}.";
         var planEn = string.IsNullOrWhiteSpace(planName) ? "." : $" — {planName} plan.";
 
-        if (needsRetailApproval)
-        {
-            return notifications.PublishAsync(new NotificationDraft
+        var handler = needsRetailApproval
+            ? notifications.PublishAsync(new NotificationDraft
             {
                 Type = "order",
                 TitleVi = "Đơn hàng mới chờ duyệt hồ sơ",
@@ -52,23 +57,60 @@ public static class NotificationEvents
                 SectionVi = "Bán lẻ • Duyệt hồ sơ chi nhánh",
                 SectionEn = "Retail • Branch Approval Queue",
                 EntityId = orderId
-            }, NotificationAudiences.Retail, ct);
-        }
+            }, NotificationAudiences.Retail, ct)
+            : notifications.PublishAsync(new NotificationDraft
+            {
+                Type = "order",
+                TitleVi = "Đơn hàng mới cần khảo sát",
+                TitleEn = "New order pending assessment",
+                DescVi = $"Khách {customerName} vừa đặt đơn {orderId}{planVi}",
+                DescEn = $"{customerName} just placed order {orderId}{planEn}",
+                TargetPath = "/technical",
+                TargetTab = "feasibility-queue",
+                TargetRole = "technical",
+                SectionVi = "Kỹ thuật • Hàng đợi khảo sát",
+                SectionEn = "Technical • Feasibility Queue",
+                EntityId = orderId
+            }, NotificationAudiences.Technical, ct);
 
-        return notifications.PublishAsync(new NotificationDraft
+        var admin = notifications.PublishAsync(new NotificationDraft
         {
             Type = "order",
-            TitleVi = "Đơn hàng mới cần khảo sát",
-            TitleEn = "New order pending assessment",
+            TitleVi = "Có đơn đăng ký dịch vụ mới",
+            TitleEn = "New service order received",
             DescVi = $"Khách {customerName} vừa đặt đơn {orderId}{planVi}",
             DescEn = $"{customerName} just placed order {orderId}{planEn}",
-            TargetPath = "/technical",
-            TargetTab = "feasibility-queue",
-            TargetRole = "technical",
-            SectionVi = "Kỹ thuật • Hàng đợi khảo sát",
-            SectionEn = "Technical • Feasibility Queue",
+            TargetPath = "/admin",
+            TargetTab = "overview",
+            TargetRole = "admin",
+            SectionVi = "Quản trị • Tổng quan",
+            SectionEn = "Admin • Overview",
             EntityId = orderId
-        }, NotificationAudiences.Technical, ct);
+        }, NotificationAudiences.Admin, ct);
+
+        var customerAudiences = (customerAccountIds ?? Array.Empty<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(NotificationAudiences.ForAccount)
+            .ToList();
+
+        var customer = customerAudiences.Count == 0
+            ? Task.CompletedTask
+            : notifications.PublishAsync(new NotificationDraft
+            {
+                Type = "order",
+                TitleVi = "Đã tiếp nhận đơn đăng ký của bạn",
+                TitleEn = "Your order has been received",
+                DescVi = $"Đơn {orderId}{planVi.TrimEnd('.')} đang chờ chi nhánh duyệt hồ sơ, sau đó kỹ thuật sẽ khảo sát hạ tầng.",
+                DescEn = $"Order {orderId}{planEn.TrimEnd('.')} is awaiting branch paperwork review, then a technical survey.",
+                TargetPath = "/user",
+                TargetTab = "new-service",
+                TargetRole = "user",
+                SectionVi = "Khách hàng • Đăng ký gói mới",
+                SectionEn = "Customer • New Service",
+                EntityId = orderId
+            }, customerAudiences, ct);
+
+        return Task.WhenAll(handler, admin, customer);
     }
 
     // ---- 2. Bán lẻ duyệt xong -> kỹ thuật vào khảo sát ----

@@ -13,6 +13,7 @@
     User, Lock, Mail, Crown, Store, Wrench, Receipt, Copy, Check, Zap
   } from 'lucide-svelte';
   import { isValidEmail } from '../lib/validation';
+  import { forgotAccountIdApi, ApiError } from '../lib/api';
   import { toast } from 'svelte-sonner';
 
   const { loginWithAccountId, loginWithCredentials, loginQuickStaff, requestLoginOtp, loginWithOtp, currentUser } = authStore;
@@ -46,6 +47,33 @@
 
     return () => clearInterval(timer);
   });
+
+  // ---- Quên / chưa nhận được mã tài khoản: gửi lại mã về email đã đăng ký ----
+  let showForgotId = $state(false);
+  let forgotEmail = $state('');
+  let forgotSubmitting = $state(false);
+
+  const handleForgotAccountId = async () => {
+    const email = forgotEmail.trim();
+    if (!isValidEmail(email)) {
+      toast.error($language === 'vi' ? 'Email không hợp lệ.' : 'Invalid email address.');
+      return;
+    }
+    forgotSubmitting = true;
+    try {
+      const res = await forgotAccountIdApi(email);
+      toast.success(res.message);
+      showForgotId = false;
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError && err.message !== 'network'
+          ? err.message
+          : $language === 'vi' ? 'Không kết nối được máy chủ.' : 'Could not reach the server.'
+      );
+    } finally {
+      forgotSubmitting = false;
+    }
+  };
 
   const formatCountdown = (totalSeconds: number) => {
     const m = Math.floor(totalSeconds / 60);
@@ -509,9 +537,49 @@
                 </div>
                 <p class="mt-1.5 text-[11px] text-[#537292] dark:text-slate-400">
                   {$language === 'vi'
-                    ? 'Mã tài khoản được gửi về email của bạn sau khi kế toán xác minh thanh toán.'
-                    : 'Your Account ID is emailed to you once Accounts verifies your payment.'}
+                    ? 'Mã tài khoản được gửi về email của bạn ngay khi kỹ thuật đấu nối xong đường truyền.'
+                    : 'Your Account ID is emailed to you as soon as your line is connected.'}
+                  <button
+                    type="button"
+                    onclick={() => (showForgotId = !showForgotId)}
+                    class="ml-1 font-semibold text-sky-600 dark:text-sky-400 hover:underline cursor-pointer"
+                  >
+                    {$language === 'vi' ? 'Quên / chưa nhận được mã?' : 'Forgot your Account ID?'}
+                  </button>
                 </p>
+
+                {#if showForgotId}
+                  <!-- Gửi lại mã tài khoản về email đã đăng ký -->
+                  <div class="mt-2 p-3 rounded-xl bg-[#EDF6FF] dark:bg-[#101C29] border border-[#CCE4F7] dark:border-[#253D56] space-y-2">
+                    <p class="text-[11px] text-[#537292] dark:text-slate-400">
+                      {$language === 'vi'
+                        ? 'Nhập email bạn đã dùng khi đăng ký dịch vụ, hệ thống sẽ gửi lại mã tài khoản.'
+                        : 'Enter the email you registered with and we will resend your Account ID.'}
+                    </p>
+                    <div class="flex gap-2">
+                      <input
+                        id="forgotEmail"
+                        type="email"
+                        bind:value={forgotEmail}
+                        placeholder="email@example.com"
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); handleForgotAccountId(); }
+                        }}
+                        class="flex-1 px-3 py-2 text-sm bg-white dark:bg-[#152434] border border-[#CCE4F7] dark:border-[#253D56] rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 text-[#0F1D2B] dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onclick={handleForgotAccountId}
+                        disabled={forgotSubmitting}
+                        class="px-3 py-2 rounded-lg text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white disabled:opacity-60 cursor-pointer"
+                      >
+                        {forgotSubmitting
+                          ? ($language === 'vi' ? 'Đang gửi...' : 'Sending...')
+                          : ($language === 'vi' ? 'Gửi lại mã' : 'Resend')}
+                      </button>
+                    </div>
+                  </div>
+                {/if}
               </div>
 
               <div class="pt-1">

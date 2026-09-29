@@ -81,7 +81,7 @@ public sealed class EmailService
             greeting: $"Chào {Escape(customerName)},",
             intro: intro,
             codeLabel: "MÃ ĐĂNG NHẬP (MÃ TÀI KHOẢN)",
-            code: accountId,
+            code: FormatAccountId(accountId),
             details: new[]
             {
                 ("Số hoá đơn", Escape(invoiceNumber)),
@@ -95,6 +95,75 @@ public sealed class EmailService
             : $"[Nexus] Đã nhận thanh toán hoá đơn {invoiceNumber}";
 
         return SendAsync(toEmail, subject, body, ct);
+    }
+
+    /// <summary>
+    /// 2b. Kỹ thuật vừa đấu nối xong — gửi Mã tài khoản ngay lúc này.
+    /// Trước đây mã chỉ được gửi khi kế toán ghi nhận thanh toán, nhưng khách lại cần chính
+    /// mã đó để đăng nhập (kể cả để thanh toán online), nên khách mới không vào được cổng.
+    /// </summary>
+    public Task<bool> SendConnectionReadyAsync(
+        string toEmail,
+        string customerName,
+        string accountId,
+        string orderId,
+        string? planName,
+        CancellationToken ct = default)
+    {
+        var body = Layout(
+            title: "Đường truyền đã sẵn sàng",
+            greeting: $"Chào {Escape(customerName)},",
+            intro: "Bộ phận kỹ thuật đã đấu nối xong dịch vụ của bạn. Dưới đây là Mã tài khoản — " +
+                   "đây cũng là mã để đăng nhập vào cổng khách hàng Nexus Telecom.",
+            codeLabel: "MÃ ĐĂNG NHẬP (MÃ TÀI KHOẢN)",
+            code: FormatAccountId(accountId),
+            details: new[]
+            {
+                ("Mã đơn hàng", Escape(orderId)),
+                ("Dịch vụ", string.IsNullOrWhiteSpace(planName) ? "—" : Escape(planName))
+            },
+            footer: "Khi đăng nhập, bạn nhập mã tài khoản này (có hoặc không có dấu gạch đều được) rồi " +
+                    "nhập mã OTP 6 chữ số mà hệ thống gửi về chính email này. Hoá đơn đầu kỳ sẽ được gửi sau.");
+
+        return SendAsync(toEmail, $"[Nexus] Mã tài khoản {FormatAccountId(accountId)} — đường truyền đã sẵn sàng", body, ct);
+    }
+
+    /// <summary>
+    /// 2c. Khách quên mã tài khoản — gửi lại mọi mã tài khoản gắn với email này.
+    /// </summary>
+    public Task<bool> SendAccountIdReminderAsync(
+        string toEmail,
+        string customerName,
+        IReadOnlyList<string> accountIds,
+        CancellationToken ct = default)
+    {
+        var formatted = accountIds.Select(FormatAccountId).ToList();
+
+        var body = Layout(
+            title: "Mã tài khoản của bạn",
+            greeting: $"Chào {Escape(customerName)},",
+            intro: "Bạn vừa yêu cầu gửi lại mã tài khoản Nexus Telecom. Dùng mã bên dưới để đăng nhập " +
+                   "cổng khách hàng.",
+            codeLabel: formatted.Count > 1 ? "CÁC MÃ TÀI KHOẢN" : "MÃ TÀI KHOẢN",
+            code: string.Join(" · ", formatted),
+            details: new[]
+            {
+                ("Số tài khoản", formatted.Count.ToString())
+            },
+            footer: "Nếu bạn không yêu cầu, hãy bỏ qua email này — không ai đăng nhập được nếu thiếu " +
+                    "mã OTP gửi về chính hộp thư của bạn.");
+
+        return SendAsync(toEmail, "[Nexus] Mã tài khoản đăng nhập của bạn", body, ct);
+    }
+
+    /// <summary>
+    /// Mã mới cấp lưu trong CSDL dạng liền "T064000000000010"; hiển thị trong email dạng
+    /// "T064-000000000010" cho dễ đọc. Màn hình đăng nhập chấp nhận cả hai dạng.
+    /// </summary>
+    public static string FormatAccountId(string accountId)
+    {
+        var key = new string((accountId ?? "").Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+        return key.Length > 4 ? $"{key[..4]}-{key[4..]}" : key;
     }
 
     /// <summary>3. Khách nhập mã tài khoản ở màn hình đăng nhập — gửi OTP 6 chữ số.</summary>

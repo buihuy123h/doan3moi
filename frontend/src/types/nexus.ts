@@ -128,9 +128,19 @@ export function orderStatusTone(status: OrderStatus): {
 // Bulk / corporate scheme: discount on the advance (first rental) and the security
 // deposit, based on how many connections the order covers.
 //   10–15 => 25%   15–25 => 50%   25–50 => 75%   >50 => 100%
+/**
+ * Trên mốc này (> 50 kết nối) khách được MIỄN hoàn toàn tiền cọc. Phải khớp
+ * BulkDiscounts.DepositWaiverThreshold (backend) và cột tính toán Orders.DepositWaived.
+ */
+export const DEPOSIT_WAIVER_MIN_CONNECTIONS = 50;
+
+export function isDepositWaived(connectionCount: number): boolean {
+  return Math.floor(connectionCount || 1) > DEPOSIT_WAIVER_MIN_CONNECTIONS;
+}
+
 export function getBulkDiscountPercent(connectionCount: number): number {
   const n = Math.max(1, Math.floor(connectionCount || 1));
-  if (n > 50) return 100;
+  if (isDepositWaived(n)) return 100;
   if (n >= 25) return 75;
   if (n >= 15) return 50;
   if (n >= 10) return 25;
@@ -219,6 +229,26 @@ export interface PurchaseOrder {
   createdBy?: string;
 }
 
+// 3.2 Equipment Requests (Yêu cầu nhập thiết bị / vật tư từ Kỹ thuật viên gửi Admin)
+export interface EquipmentRequest {
+  id: string;
+  orderId?: string | null;
+  storeId: string;
+  storeName?: string;
+  employeeId: string;
+  employeeName?: string;
+  inventoryId?: string | null;
+  itemName: string;
+  deviceType: string;
+  quantity: number;
+  urgency: 'Low' | 'Normal' | 'High' | 'Urgent';
+  status: 'Pending' | 'Approved' | 'Fulfilled' | 'Rejected';
+  reason?: string | null;
+  adminNotes?: string | null;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
 // 4. Retail Shops / Outlets (Admin Management)
 export interface RetailShop {
   id: string;
@@ -293,6 +323,7 @@ export interface Order {
   // Bulk / corporate scheme
   bulkConnectionsCount: number; // connections covered by this order (>= 1)
   bulkDiscountPercent: number; // derived from getBulkDiscountPercent()
+  depositWaived?: boolean; // > 50 kết nối: miễn tiền cọc (Orders.DepositWaived trong CSDL)
 
   // Dial-Up: feasibility is checked for BOTH the landline and the internet leg,
   // unless the customer already holds a Nexus landline (then internet only).
@@ -364,6 +395,9 @@ export interface PaymentRecord {
 export interface Bill {
   id: string;
   invoiceNumber: string; // e.g., "NEX-INV-2025-001"
+  /** Mô tả "hóa đơn của cái gì" — backend sinh (BillingService.BuildInvoiceDescription)
+   *  để khách hàng lẫn nhân viên đều đọc được hóa đơn này cho khoản gì, kỳ nào. */
+  description?: string;
   accountId: string; // 16-digit
   customerName: string;
   billingMonth: string; // e.g., "September 2026"

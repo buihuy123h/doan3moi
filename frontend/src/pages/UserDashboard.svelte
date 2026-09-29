@@ -1,7 +1,7 @@
 <script lang="ts">
   // Subscriber portal: everything is keyed off the Account ID used to sign in.
   import { authStore } from "../context/AuthContext";
-  import { nexusStore } from "../context/NexusContext";
+  import { nexusStore, accountIdKey } from "../context/NexusContext";
   import { languageStore } from "../context/LanguageContext";
   import { notificationStore } from "../context/NotificationContext";
   import DashboardLayout from "../components/layout/DashboardLayout.svelte";
@@ -59,7 +59,13 @@
   } from "../types/nexus";
   import { toast } from "svelte-sonner";
   import { queryParam, activeTabOverride } from "../lib/router";
-  import { isValidCccd, isValidEmail, isValidPhone, isValidPassport, isValidDriverLicense } from "../lib/validation";
+  import {
+    isValidCccd,
+    isValidEmail,
+    isValidPhone,
+    isValidPassport,
+    isValidDriverLicense,
+  } from "../lib/validation";
   import {
     fetchChatMessagesApi,
     startChatSessionApi,
@@ -118,64 +124,72 @@
   let orderingPlan = $state<Plan | null>(null);
   let newOrderCustomerName = $state("");
   let newOrderCustomerEmail = $state("");
-  let newOrderProvince = $state('');
-  let newOrderDistrict = $state('');
-  let newOrderWard = $state('');
-  let newOrderSpecificAddress = $state('');
-  const newOrderAddress = $derived([newOrderSpecificAddress, newOrderWard, newOrderDistrict, newOrderProvince].filter(Boolean).join(', '));
-  
+  let newOrderProvince = $state("");
+  let newOrderDistrict = $state("");
+  let newOrderWard = $state("");
+  let newOrderSpecificAddress = $state("");
+  const newOrderAddress = $derived(
+    [newOrderSpecificAddress, newOrderWard, newOrderDistrict, newOrderProvince]
+      .filter(Boolean)
+      .join(", "),
+  );
+
   let showMapModal = $state(false);
-  let mapSearchQuery = $state('');
+  let mapSearchQuery = $state("");
 
   let provincesList = $state<any[]>([]);
   let districtsList = $state<any[]>([]);
   let wardsList = $state<any[]>([]);
 
   $effect(() => {
-    fetch('https://esgoo.net/api-tinhthanh/1/0.htm')
-      .then(r => r.json())
-      .then(d => {
-        if(d.error === 0) provincesList = d.data;
+    fetch("https://esgoo.net/api-tinhthanh/1/0.htm")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error === 0) provincesList = d.data;
       })
-      .catch(e => console.error(e));
+      .catch((e) => console.error(e));
   });
 
   $effect(() => {
     if (newOrderProvince) {
-      const p = provincesList.find(x => x.name === newOrderProvince || x.full_name === newOrderProvince);
+      const p = provincesList.find(
+        (x) => x.name === newOrderProvince || x.full_name === newOrderProvince,
+      );
       if (p) {
         fetch(`https://esgoo.net/api-tinhthanh/2/${p.id}.htm`)
-          .then(r => r.json())
-          .then(d => {
-            if(d.error === 0) districtsList = d.data;
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.error === 0) districtsList = d.data;
           })
-          .catch(e => console.error(e));
+          .catch((e) => console.error(e));
       } else {
         districtsList = [];
       }
     } else {
       districtsList = [];
-      newOrderDistrict = '';
-      newOrderWard = '';
+      newOrderDistrict = "";
+      newOrderWard = "";
     }
   });
 
   $effect(() => {
     if (newOrderDistrict) {
-      const d = districtsList.find(x => x.name === newOrderDistrict || x.full_name === newOrderDistrict);
+      const d = districtsList.find(
+        (x) => x.name === newOrderDistrict || x.full_name === newOrderDistrict,
+      );
       if (d) {
         fetch(`https://esgoo.net/api-tinhthanh/3/${d.id}.htm`)
-          .then(r => r.json())
-          .then(d => {
-            if(d.error === 0) wardsList = d.data;
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.error === 0) wardsList = d.data;
           })
-          .catch(e => console.error(e));
+          .catch((e) => console.error(e));
       } else {
         wardsList = [];
       }
     } else {
       wardsList = [];
-      newOrderWard = '';
+      newOrderWard = "";
     }
   });
   let newOrderPhone = $state("");
@@ -196,7 +210,7 @@
       } catch {
         return null;
       }
-    })()
+    })(),
   );
 
   function sendGmailNotification(orderReceipt: Order) {
@@ -218,26 +232,17 @@
             ? `Chi tiết gói cước "${orderReceipt.planName}" và hướng dẫn theo dõi tiến độ đã được gửi vào hòm thư.`
             : `Details for plan "${orderReceipt.planName}" sent to your inbox.`,
         icon: Mail as any,
-      }
+      },
     );
   }
 
-  function sendAccountNotification(orderReceipt: Order) {
+  async function sendAccountNotification(orderReceipt: Order) {
     newOrderAccountNotified = true;
-    notificationStore.addNotification({
-      id: `order-placed-${orderReceipt.id}-${Date.now()}`,
-      type: "order",
-      titleVi: "Đăng ký gói cước mới thành công",
-      titleEn: "New Service Subscription Registered",
-      descVi: `Đơn hàng #${orderReceipt.id} (Gói ${orderReceipt.planName}) đã được tiếp nhận và chuyển đến bộ phận Kỹ thuật khảo sát hạ tầng.`,
-      descEn: `Order #${orderReceipt.id} (${orderReceipt.planName} plan) is registered and dispatched to Technical team for line survey.`,
-      targetPath: "/user",
-      targetTab: "new-service",
-      targetRole: "user",
-      sectionVi: "Cổng khách hàng • Đăng ký dịch vụ",
-      sectionEn: "Subscriber Portal • New Service",
-      entityId: orderReceipt.id,
-    });
+    // Thông báo "đã tiếp nhận đơn" do backend tạo và lưu vào CSDL ngay khi đơn được ghi
+    // (xem NotificationEvents.OrderPlacedAsync), rồi đẩy xuống qua SignalR. Ở đây chỉ tải
+    // lại danh sách từ CSDL — trước đây hàm này tự thêm một thông báo giả chỉ nằm trên
+    // trình duyệt, tải lại trang là mất và trong CSDL không hề có.
+    await notificationStore.refresh();
 
     toast.success(
       $language === "vi"
@@ -249,7 +254,7 @@
             ? "Bạn có thể kiểm tra danh sách thông báo trên chuông thông báo Header hoặc trên Dashboard."
             : "You can check it via the notification bell on the top header or your Dashboard.",
         icon: Bell as any,
-      }
+      },
     );
   }
 
@@ -268,14 +273,19 @@
   const filteredNewPlans = $derived(
     $plans.filter((p) => {
       const matchStatus = p.status === "Active";
-      const matchCat = newOrderCategory === "all" || p.type === newOrderCategory;
+      const matchCat =
+        newOrderCategory === "all" || p.type === newOrderCategory;
       const matchSearch =
         !newPlanSearch.trim() ||
         p.name.toLowerCase().includes(newPlanSearch.trim().toLowerCase()) ||
         (p.description &&
-          p.description.toLowerCase().includes(newPlanSearch.trim().toLowerCase())) ||
+          p.description
+            .toLowerCase()
+            .includes(newPlanSearch.trim().toLowerCase())) ||
         (p.speedOrBandwidth &&
-          p.speedOrBandwidth.toLowerCase().includes(newPlanSearch.trim().toLowerCase()));
+          p.speedOrBandwidth
+            .toLowerCase()
+            .includes(newPlanSearch.trim().toLowerCase()));
       return matchStatus && matchCat && matchSearch;
     }),
   );
@@ -313,9 +323,12 @@
     newOrderHasLandline = false;
   }
 
+  // Chặn gửi đơn 2 lần (bấm đúp / Enter + click) khi request trước chưa xong.
+  let isPlacingNewOrder = $state(false);
+
   async function handleConfirmNewServiceOrder(e: SubmitEvent) {
     e.preventDefault();
-    if (!orderingPlan) return;
+    if (!orderingPlan || isPlacingNewOrder) return;
     if (
       !newOrderCustomerName ||
       !newOrderPhone ||
@@ -381,7 +394,10 @@
       return;
     }
 
-    if (orderingPlan.type === "Dial-Up" && (!newOrderHasLandline || !accountId.startsWith("T"))) {
+    if (
+      orderingPlan.type === "Dial-Up" &&
+      (!newOrderHasLandline || !accountId.startsWith("T"))
+    ) {
       toast.error(
         $language === "vi"
           ? "Bạn bắt buộc phải có tài khoản Điện thoại Cố định (Landline) để đăng ký mạng Quay số (Dial-Up)!"
@@ -390,29 +406,56 @@
       return;
     }
 
-    const created = await placeOrder({
-      customerName: newOrderCustomerName.trim(),
-      customerPhone: newOrderPhone.trim(),
-      customerEmail:
-        newOrderCustomerEmail.trim() ||
-        $currentUser?.email ||
-        connection?.customerEmail ||
-        "customer@nexus.telecom",
-      installationAddress: newOrderAddress.trim(),
-      idProofType: newOrderIdProofType,
-      idProofNumber: newOrderIdProofNumber.trim(),
-      connectionType: orderingPlan.type,
-      planId: orderingPlan.id,
-      planName: orderingPlan.name,
-      retailOutletCode: newOrderShopCode,
-      retailEmployeeName: "Customer Self-Service",
-      bulkConnectionsCount: Math.max(1, newOrderBulkCount || 1),
-      ...(orderingPlan.type === "Dial-Up" &&
-      newOrderHasLandline &&
-      accountId.startsWith("T")
-        ? { existingLandlineAccountId: accountId }
-        : {}),
-    });
+    // Không còn dùng email giả "customer@nexus.telecom" làm dự phòng: backend nhận diện
+    // khách theo email, nên mọi đơn thiếu email từng bị gom chung vào MỘT hồ sơ khách
+    // và bên Kỹ thuật hiện tên/SĐT của người khác.
+    const orderEmail =
+      newOrderCustomerEmail.trim() ||
+      $currentUser?.email ||
+      connection?.customerEmail ||
+      "";
+
+    let created: Order;
+    isPlacingNewOrder = true;
+    try {
+      created = await placeOrder({
+        customerName: newOrderCustomerName.trim(),
+        customerPhone: newOrderPhone.trim(),
+        customerEmail: orderEmail,
+        installationAddress: newOrderAddress.trim(),
+        idProofType: newOrderIdProofType,
+        idProofNumber: newOrderIdProofNumber.trim(),
+        connectionType: orderingPlan.type,
+        planId: orderingPlan.id,
+        planName: orderingPlan.name,
+        retailOutletCode: newOrderShopCode,
+        retailEmployeeName: "Customer Self-Service",
+        bulkConnectionsCount: Math.max(1, newOrderBulkCount || 1),
+        ...(orderingPlan.type === "Dial-Up" &&
+        newOrderHasLandline &&
+        accountId.startsWith("T")
+          ? { existingLandlineAccountId: accountId }
+          : {}),
+      });
+    } catch (err) {
+      // Đơn KHÔNG vào được CSDL thì phải nói thật, không hiện biên nhận giả.
+      toast.error(
+        $language === "vi"
+          ? "Chưa gửi được đơn hàng"
+          : "Order was not submitted",
+        {
+          description:
+            err instanceof Error && err.message !== "network"
+              ? err.message
+              : $language === "vi"
+                ? "Không kết nối được máy chủ. Vui lòng thử lại."
+                : "Could not reach the server. Please try again.",
+        },
+      );
+      return;
+    } finally {
+      isPlacingNewOrder = false;
+    }
 
     newOrderPlacedReceipt = created;
     try {
@@ -424,7 +467,7 @@
       sendGmailNotification(created);
     }
     if (newOrderNotifyAccount) {
-      sendAccountNotification(created);
+      void sendAccountNotification(created);
     }
 
     toast.success(
@@ -647,16 +690,22 @@
   }
 
   const accountId = $derived($currentUser?.accountId ?? "");
+  // So khớp theo khoá không gạch nối: mã cấp mới lưu trong CSDL dạng "T064000000000010",
+  // còn phiên đăng nhập giữ dạng hiển thị "T064-000000000010". So bằng === thì khách mới
+  // đăng nhập xong không thấy đường truyền, đơn hàng hay hoá đơn nào của mình.
+  const accountKey = $derived(accountIdKey(accountId));
+  const sameAccount = (value?: string | null) =>
+    !!value && !!accountKey && accountIdKey(value) === accountKey;
   const connection = $derived(
-    $connections.find((c) => c.accountId === accountId) ?? null,
+    $connections.find((c) => sameAccount(c.accountId)) ?? null,
   );
   const order = $derived(
-    $orders.find((o) => o.assignedAccountId === accountId) ?? null,
+    $orders.find((o) => sameAccount(o.assignedAccountId)) ?? null,
   );
   const shop = $derived(
     $retailShops.find((s) => s.shopCode === order?.retailOutletCode) ?? null,
   );
-  const myBills = $derived($bills.filter((b) => b.accountId === accountId));
+  const myBills = $derived($bills.filter((b) => sameAccount(b.accountId)));
   const latestBill = $derived(myBills[0] ?? null);
 
   // Unpaid & Billing tab filter state
@@ -680,9 +729,7 @@
 
   const myFeedbacks = $derived(
     $feedbacks.filter(
-      (f) =>
-        (accountId && f.accountId === accountId) ||
-        (order && f.orderId === order.id),
+      (f) => sameAccount(f.accountId) || (order && f.orderId === order.id),
     ),
   );
 
@@ -1130,7 +1177,9 @@
       <div
         class="p-6 bg-gradient-to-br from-white via-sky-50/30 to-blue-50/20 dark:from-[#152434] dark:via-[#13283f] dark:to-[#0f1d2b] border border-sky-200 dark:border-sky-900/60 rounded-xl shadow-sm"
       >
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div
+          class="flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        >
           <div class="flex items-start space-x-3.5">
             <div
               class="p-2.5 rounded-xl bg-sky-500/10 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400 shrink-0"
@@ -1145,7 +1194,8 @@
                     : "Network Monitoring & Test Records"}
                 </h3>
                 <span
-                  class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider {connection?.status === 'Active'
+                  class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider {connection?.status ===
+                  'Active'
                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
                     : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'}"
                 >
@@ -1175,22 +1225,60 @@
         </div>
 
         {#if connection}
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-sky-100 dark:border-sky-900/40 text-xs">
-            <div class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800">
-              <span class="text-slate-500 dark:text-slate-400 block text-[11px]">{$language === "vi" ? "Độ trễ trung bình" : "Average Latency"}</span>
-              <span class="font-mono font-bold text-sky-700 dark:text-sky-300 text-sm">~12 - 18 ms</span>
+          <div
+            class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-sky-100 dark:border-sky-900/40 text-xs"
+          >
+            <div
+              class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800"
+            >
+              <span class="text-slate-500 dark:text-slate-400 block text-[11px]"
+                >{$language === "vi"
+                  ? "Độ trễ trung bình"
+                  : "Average Latency"}</span
+              >
+              <span
+                class="font-mono font-bold text-sky-700 dark:text-sky-300 text-sm"
+                >~12 - 18 ms</span
+              >
             </div>
-            <div class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800">
-              <span class="text-slate-500 dark:text-slate-400 block text-[11px]">{$language === "vi" ? "Tỷ lệ mất gói (Loss)" : "Packet Loss"}</span>
-              <span class="font-mono font-bold text-emerald-600 dark:text-emerald-400 text-sm">0.00%</span>
+            <div
+              class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800"
+            >
+              <span class="text-slate-500 dark:text-slate-400 block text-[11px]"
+                >{$language === "vi"
+                  ? "Tỷ lệ mất gói (Loss)"
+                  : "Packet Loss"}</span
+              >
+              <span
+                class="font-mono font-bold text-emerald-600 dark:text-emerald-400 text-sm"
+                >0.00%</span
+              >
             </div>
-            <div class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800">
-              <span class="text-slate-500 dark:text-slate-400 block text-[11px]">{$language === "vi" ? "Băng thông đăng ký" : "Provisioned Speed"}</span>
-              <span class="font-mono font-bold text-slate-800 dark:text-slate-200 text-sm">{connection.planName || "High Speed"}</span>
+            <div
+              class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800"
+            >
+              <span class="text-slate-500 dark:text-slate-400 block text-[11px]"
+                >{$language === "vi"
+                  ? "Băng thông đăng ký"
+                  : "Provisioned Speed"}</span
+              >
+              <span
+                class="font-mono font-bold text-slate-800 dark:text-slate-200 text-sm"
+                >{connection.planName || "High Speed"}</span
+              >
             </div>
-            <div class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800">
-              <span class="text-slate-500 dark:text-slate-400 block text-[11px]">{$language === "vi" ? "Kiểm tra gần nhất" : "Last Tested"}</span>
-              <span class="font-mono font-bold text-slate-700 dark:text-slate-300 text-sm">{connection.installedDate || "Vừa xong"}</span>
+            <div
+              class="bg-white/60 dark:bg-slate-900/40 p-2.5 rounded-lg border border-sky-100 dark:border-slate-800"
+            >
+              <span class="text-slate-500 dark:text-slate-400 block text-[11px]"
+                >{$language === "vi"
+                  ? "Kiểm tra gần nhất"
+                  : "Last Tested"}</span
+              >
+              <span
+                class="font-mono font-bold text-slate-700 dark:text-slate-300 text-sm"
+                >{connection.installedDate || "Vừa xong"}</span
+              >
             </div>
           </div>
         {/if}
@@ -2675,7 +2763,6 @@
     </div>
   {:else if activeTab === "new-service"}
     <div class="space-y-6">
-
       <!-- Search & Category Filter Toolbar (giống role Admin) -->
       <div
         class="p-4 bg-white dark:bg-[#152434] border border-[#CCE4F7] dark:border-[#253D56] rounded-2xl shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3"
@@ -2685,7 +2772,9 @@
           <input
             type="text"
             bind:value={newPlanSearch}
-            placeholder={$language === "vi" ? "Tìm gói cước theo tên, tốc độ, mô tả..." : "Search plans by name, speed..."}
+            placeholder={$language === "vi"
+              ? "Tìm gói cước theo tên, tốc độ, mô tả..."
+              : "Search plans by name, speed..."}
             class="w-full pl-10 pr-4 py-2 text-xs bg-slate-50 dark:bg-[#1A2C3F] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl text-[#0F1D2B] dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-sky-500"
           />
         </div>
@@ -2694,10 +2783,18 @@
           bind:value={newOrderCategory}
           class="text-xs bg-slate-50 dark:bg-[#1A2C3F] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl px-3 py-2 text-[#0F1D2B] dark:text-white focus:outline-hidden focus:ring-2 focus:ring-sky-500 cursor-pointer min-w-[160px]"
         >
-          <option value="all">{$language === "vi" ? "Tất cả loại" : "All Types"}</option>
-          <option value="Broadband">{$language === "vi" ? "Cáp quang" : "Broadband"}</option>
-          <option value="Dial-Up">{$language === "vi" ? "Quay số" : "Dial-Up"}</option>
-          <option value="Landline">{$language === "vi" ? "Cố định" : "Landline"}</option>
+          <option value="all"
+            >{$language === "vi" ? "Tất cả loại" : "All Types"}</option
+          >
+          <option value="Broadband"
+            >{$language === "vi" ? "Cáp quang" : "Broadband"}</option
+          >
+          <option value="Dial-Up"
+            >{$language === "vi" ? "Quay số" : "Dial-Up"}</option
+          >
+          <option value="Landline"
+            >{$language === "vi" ? "Cố định" : "Landline"}</option
+          >
         </select>
       </div>
 
@@ -2731,7 +2828,9 @@
                   >({newOrderPlacedReceipt.planName})</span
                 >
               </div>
-              <p class="text-xs text-emerald-800 dark:text-emerald-300/90 mt-1 max-w-xl">
+              <p
+                class="text-xs text-emerald-800 dark:text-emerald-300/90 mt-1 max-w-xl"
+              >
                 {$language === "vi"
                   ? "Trạng thái: Đang chờ Kỹ thuật viên chi nhánh đo kiểm hạ tầng (Feasibility Survey). Bạn có thể theo dõi tiến độ bằng mã đơn này."
                   : "Status: Awaiting branch Technical feasibility survey. You can track status with this Order ID."}
@@ -2773,9 +2872,7 @@
               class="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
             >
               <Copy class="h-4 w-4" />
-              <span
-                >{$language === "vi" ? "Sao chép mã" : "Copy ID"}</span
-              >
+              <span>{$language === "vi" ? "Sao chép mã" : "Copy ID"}</span>
             </button>
 
             <button
@@ -2795,12 +2892,18 @@
         <div
           class="p-12 text-center bg-white dark:bg-[#152434] border border-[#CCE4F7] dark:border-[#253D56] rounded-2xl text-slate-500 shadow-xs"
         >
-          <ShoppingBag class="h-10 w-10 mx-auto text-slate-400 mb-2 opacity-50" />
+          <ShoppingBag
+            class="h-10 w-10 mx-auto text-slate-400 mb-2 opacity-50"
+          />
           <p class="font-bold text-sm text-[#0F1D2B] dark:text-white">
-            {$language === "vi" ? "Không tìm thấy gói cước nào phù hợp." : "No matching plans found."}
+            {$language === "vi"
+              ? "Không tìm thấy gói cước nào phù hợp."
+              : "No matching plans found."}
           </p>
           <p class="text-xs text-[#537292] dark:text-[#8DB0D4] mt-1">
-            {$language === "vi" ? "Hãy thử thay đổi từ khóa tìm kiếm hoặc chọn danh mục khác." : "Try adjusting your search keyword or selecting another category."}
+            {$language === "vi"
+              ? "Hãy thử thay đổi từ khóa tìm kiếm hoặc chọn danh mục khác."
+              : "Try adjusting your search keyword or selecting another category."}
           </p>
         </div>
       {:else}
@@ -2870,7 +2973,8 @@
                         ? "Tiền cọc thiết bị:"
                         : "Security Deposit:"}</span
                     >
-                    <span class="font-mono font-bold">${p.securityDeposit}</span>
+                    <span class="font-mono font-bold">${p.securityDeposit}</span
+                    >
                   </div>
                   <div class="flex justify-between">
                     <span class="text-slate-400"
@@ -2882,7 +2986,9 @@
                   </div>
                   <div class="flex justify-between">
                     <span class="text-slate-400"
-                      >{$language === "vi" ? "Thời hạn cước:" : "Validity:"}</span
+                      >{$language === "vi"
+                        ? "Thời hạn cước:"
+                        : "Validity:"}</span
                     >
                     <span>{p.validity}</span>
                   </div>
@@ -2921,7 +3027,9 @@
             >
               {$language === "vi" ? "Trước" : "Prev"}
             </button>
-            <span class="px-3 py-1 text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg">
+            <span
+              class="px-3 py-1 text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg"
+            >
               {newPlanCurrentPage} / {totalNewPlanPages}
             </span>
             <button
@@ -3008,8 +3116,14 @@
               </div>
 
               <div class="mb-4">
-                <label class="block font-semibold text-[#305070] dark:text-slate-300 mb-1 flex justify-between items-end">
-                  <span>{$language === "vi" ? "Địa chỉ lắp đặt" : "Installation Address"} *</span>
+                <label
+                  class="block font-semibold text-[#305070] dark:text-slate-300 mb-1 flex justify-between items-end"
+                >
+                  <span
+                    >{$language === "vi"
+                      ? "Địa chỉ lắp đặt"
+                      : "Installation Address"} *</span
+                  >
                 </label>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
                   <div class="relative">
@@ -3017,7 +3131,11 @@
                       bind:value={newOrderProvince}
                       class="w-full px-3 py-2 text-xs bg-[#EDF6FF] dark:bg-[#101C29] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl text-[#0F1D2B] dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-sky-500 appearance-none"
                     >
-                      <option value="">{$language === 'vi' ? 'Tỉnh / Thành phố' : 'Province / City'}</option>
+                      <option value=""
+                        >{$language === "vi"
+                          ? "Tỉnh / Thành phố"
+                          : "Province / City"}</option
+                      >
                       {#each provincesList as p}
                         <option value={p.name}>{p.name}</option>
                       {/each}
@@ -3029,7 +3147,11 @@
                       disabled={!newOrderProvince}
                       class="w-full px-3 py-2 text-xs bg-[#EDF6FF] dark:bg-[#101C29] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl text-[#0F1D2B] dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-sky-500 appearance-none disabled:opacity-50"
                     >
-                      <option value="">{$language === 'vi' ? 'Quận / Huyện' : 'District'}</option>
+                      <option value=""
+                        >{$language === "vi"
+                          ? "Quận / Huyện"
+                          : "District"}</option
+                      >
                       {#each districtsList as d}
                         <option value={d.name}>{d.name}</option>
                       {/each}
@@ -3041,7 +3163,9 @@
                       disabled={!newOrderDistrict}
                       class="w-full px-3 py-2 text-xs bg-[#EDF6FF] dark:bg-[#101C29] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl text-[#0F1D2B] dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-sky-500 appearance-none disabled:opacity-50"
                     >
-                      <option value="">{$language === 'vi' ? 'Phường / Xã' : 'Ward'}</option>
+                      <option value=""
+                        >{$language === "vi" ? "Phường / Xã" : "Ward"}</option
+                      >
                       {#each wardsList as w}
                         <option value={w.name}>{w.name}</option>
                       {/each}
@@ -3049,17 +3173,31 @@
                   </div>
                 </div>
                 <div class="relative">
-                  <MapPin class="absolute left-3.5 top-2.5 h-4 w-4 text-[#7899B8] dark:text-slate-500" />
+                  <MapPin
+                    class="absolute left-3.5 top-2.5 h-4 w-4 text-[#7899B8] dark:text-slate-500"
+                  />
                   <input
                     type="text"
                     bind:value={newOrderSpecificAddress}
                     required
-                    placeholder={$language === 'vi' ? 'Địa chỉ cụ thể (số nhà, tên đường)' : 'Specific address (house no, street)'}
+                    placeholder={$language === "vi"
+                      ? "Địa chỉ cụ thể (số nhà, tên đường)"
+                      : "Specific address (house no, street)"}
                     class="w-full pl-9 pr-10 py-2 text-xs bg-[#EDF6FF] dark:bg-[#101C29] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl text-[#0F1D2B] dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-sky-500"
                   />
-                  <button type="button" onclick={() => { showMapModal = true; mapSearchQuery = newOrderAddress; }} class="absolute right-1 top-1 px-2 py-1 bg-sky-600 dark:bg-sky-500 hover:bg-sky-700 dark:hover:bg-[#1C2C3D] text-white rounded-md transition cursor-pointer flex items-center space-x-1 shadow-sm text-[10px] font-semibold" title={$language === 'vi' ? 'Chọn trên bản đồ' : 'Pick on map'}>
+                  <button
+                    type="button"
+                    onclick={() => {
+                      showMapModal = true;
+                      mapSearchQuery = newOrderAddress;
+                    }}
+                    class="absolute right-1 top-1 px-2 py-1 bg-sky-600 dark:bg-sky-500 hover:bg-sky-700 dark:hover:bg-[#1C2C3D] text-white rounded-md transition cursor-pointer flex items-center space-x-1 shadow-sm text-[10px] font-semibold"
+                    title={$language === "vi"
+                      ? "Chọn trên bản đồ"
+                      : "Pick on map"}
+                  >
                     <Navigation class="h-3 w-3" />
-                    <span>{$language === 'vi' ? 'Bản đồ' : 'Map'}</span>
+                    <span>{$language === "vi" ? "Bản đồ" : "Map"}</span>
                   </button>
                 </div>
               </div>
@@ -3145,14 +3283,32 @@
                   </label>
                   <input
                     type="text"
-                    inputmode={newOrderIdProofType === "Passport" ? "text" : "numeric"}
-                    pattern={newOrderIdProofType === "National ID Card" || newOrderIdProofType === "Driver's License" ? "[0-9]{12}" : newOrderIdProofType === "Passport" ? "[A-Za-z0-9]{7,9}" : undefined}
-                    maxlength={newOrderIdProofType === "National ID Card" || newOrderIdProofType === "Driver's License" ? 12 : newOrderIdProofType === "Passport" ? 9 : undefined}
-                    title={newOrderIdProofType === "National ID Card"
-                      ? $language === "vi" ? "CCCD phải gồm đúng 12 chữ số" : "National ID must contain exactly 12 digits"
+                    inputmode={newOrderIdProofType === "Passport"
+                      ? "text"
+                      : "numeric"}
+                    pattern={newOrderIdProofType === "National ID Card" ||
+                    newOrderIdProofType === "Driver's License"
+                      ? "[0-9]{12}"
                       : newOrderIdProofType === "Passport"
-                        ? $language === "vi" ? "Passport phải gồm 7-9 ký tự chữ và số" : "Passport must be 7-9 alphanumeric characters"
-                        : $language === "vi" ? "Bằng lái xe phải gồm đúng 12 chữ số" : "Driver's License must contain exactly 12 digits"}
+                        ? "[A-Za-z0-9]{7,9}"
+                        : undefined}
+                    maxlength={newOrderIdProofType === "National ID Card" ||
+                    newOrderIdProofType === "Driver's License"
+                      ? 12
+                      : newOrderIdProofType === "Passport"
+                        ? 9
+                        : undefined}
+                    title={newOrderIdProofType === "National ID Card"
+                      ? $language === "vi"
+                        ? "CCCD phải gồm đúng 12 chữ số"
+                        : "National ID must contain exactly 12 digits"
+                      : newOrderIdProofType === "Passport"
+                        ? $language === "vi"
+                          ? "Passport phải gồm 7-9 ký tự chữ và số"
+                          : "Passport must be 7-9 alphanumeric characters"
+                        : $language === "vi"
+                          ? "Bằng lái xe phải gồm đúng 12 chữ số"
+                          : "Driver's License must contain exactly 12 digits"}
                     bind:value={newOrderIdProofNumber}
                     required
                     class="w-full px-3 py-2 text-xs bg-[#EDF6FF] dark:bg-[#101C29] border border-[#CCE4F7] dark:border-[#253D56] rounded-xl text-[#0F1D2B] dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -3289,9 +3445,16 @@
                 </button>
                 <button
                   type="submit"
-                  class="px-5 py-2 rounded-xl font-bold bg-sky-600 hover:bg-sky-700 text-white shadow-xs transition"
+                  disabled={isPlacingNewOrder}
+                  class="px-5 py-2 rounded-xl font-bold bg-sky-600 hover:bg-sky-700 text-white shadow-xs transition disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {$language === "vi" ? "Xác nhận đặt đơn" : "Submit Order"}
+                  {isPlacingNewOrder
+                    ? $language === "vi"
+                      ? "Đang gửi đơn..."
+                      : "Submitting..."
+                    : $language === "vi"
+                      ? "Xác nhận đặt đơn"
+                      : "Submit Order"}
                 </button>
               </div>
             </form>
@@ -3423,95 +3586,134 @@
     <ProfileView />
   {/if}
 
-<!-- Map Modal for User Dashboard -->
-{#if showMapModal}
-  <div class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-    <div class="bg-white dark:bg-[#0B141E] w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
-      <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-[#101C29]">
-        <h3 class="font-bold text-slate-800 dark:text-white flex items-center space-x-2">
-          <Navigation class="h-4 w-4 text-sky-500" />
-          <span>{$language === 'vi' ? 'Cài đặt địa chỉ lắp đặt' : 'Set Installation Address'}</span>
-        </h3>
-        <button onclick={() => showMapModal = false} class="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white transition cursor-pointer">
-          <X class="h-5 w-5" />
-        </button>
-      </div>
-
-      <div class="p-4 space-y-4">
-        <div class="relative">
-          <Search class="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-          <input
-            type="text"
-            bind:value={mapSearchQuery}
-            placeholder={$language === 'vi' ? 'Tìm kiếm địa chỉ trên bản đồ...' : 'Search address on map...'}
-            class="w-full pl-9 pr-4 py-2.5 text-sm bg-slate-100 dark:bg-[#152333] border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 text-slate-800 dark:text-white transition"
-          />
+  <!-- Map Modal for User Dashboard -->
+  {#if showMapModal}
+    <div
+      class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+    >
+      <div
+        class="bg-white dark:bg-[#0B141E] w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200"
+      >
+        <div
+          class="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-[#101C29]"
+        >
+          <h3
+            class="font-bold text-slate-800 dark:text-white flex items-center space-x-2"
+          >
+            <Navigation class="h-4 w-4 text-sky-500" />
+            <span
+              >{$language === "vi"
+                ? "Cài đặt địa chỉ lắp đặt"
+                : "Set Installation Address"}</span
+            >
+          </h3>
+          <button
+            onclick={() => (showMapModal = false)}
+            class="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white transition cursor-pointer"
+          >
+            <X class="h-5 w-5" />
+          </button>
         </div>
 
-        <div class="relative w-full h-[300px] sm:h-[400px] bg-slate-200 dark:bg-slate-800 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700">
-          <iframe
-            title="Google Maps"
-            width="100%"
-            height="100%"
-            style="border:0;"
-            loading="lazy"
-            src={`https://maps.google.com/maps?q=${encodeURIComponent(mapSearchQuery || 'Hanoi, Vietnam')}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
-          ></iframe>
-          <!-- Center Pin overlay -->
-          <div class="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <button 
-              type="button"
-              onclick={() => {
-                if (mapSearchQuery.trim()) {
-                  newOrderProvince = '';
-                  newOrderDistrict = '';
-                  newOrderWard = '';
-                  newOrderSpecificAddress = mapSearchQuery;
-                  showMapModal = false;
-                  toast.success($language === 'vi' ? 'Đã lấy vị trí thành công!' : 'Location retrieved successfully!');
-                } else {
-                  toast.error($language === 'vi' ? 'Vui lòng nhập địa chỉ vào ô tìm kiếm' : 'Please search for an address first');
-                }
-              }}
-              class="mb-8 relative flex flex-col items-center pointer-events-auto cursor-pointer group"
+        <div class="p-4 space-y-4">
+          <div class="relative">
+            <Search class="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              bind:value={mapSearchQuery}
+              placeholder={$language === "vi"
+                ? "Tìm kiếm địa chỉ trên bản đồ..."
+                : "Search address on map..."}
+              class="w-full pl-9 pr-4 py-2.5 text-sm bg-slate-100 dark:bg-[#152333] border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 text-slate-800 dark:text-white transition"
+            />
+          </div>
+
+          <div
+            class="relative w-full h-[300px] sm:h-[400px] bg-slate-200 dark:bg-slate-800 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700"
+          >
+            <iframe
+              title="Google Maps"
+              width="100%"
+              height="100%"
+              style="border:0;"
+              loading="lazy"
+              src={`https://maps.google.com/maps?q=${encodeURIComponent(mapSearchQuery || "Hanoi, Vietnam")}&t=&z=15&ie=UTF8&iwloc=&output=embed`}
+            ></iframe>
+            <!-- Center Pin overlay -->
+            <div
+              class="absolute inset-0 pointer-events-none flex items-center justify-center"
             >
-              <div class="bg-rose-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md mb-1 group-hover:scale-110 transition-transform">
-                {$language === 'vi' ? 'Chọn vị trí này' : 'Pick this location'}
-              </div>
-              <MapPin class="h-8 w-8 text-rose-500 drop-shadow-md group-hover:scale-110 transition-transform" />
-            </button>
+              <button
+                type="button"
+                onclick={() => {
+                  if (mapSearchQuery.trim()) {
+                    newOrderProvince = "";
+                    newOrderDistrict = "";
+                    newOrderWard = "";
+                    newOrderSpecificAddress = mapSearchQuery;
+                    showMapModal = false;
+                    toast.success(
+                      $language === "vi"
+                        ? "Đã lấy vị trí thành công!"
+                        : "Location retrieved successfully!",
+                    );
+                  } else {
+                    toast.error(
+                      $language === "vi"
+                        ? "Vui lòng nhập địa chỉ vào ô tìm kiếm"
+                        : "Please search for an address first",
+                    );
+                  }
+                }}
+                class="mb-8 relative flex flex-col items-center pointer-events-auto cursor-pointer group"
+              >
+                <div
+                  class="bg-rose-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md mb-1 group-hover:scale-110 transition-transform"
+                >
+                  {$language === "vi"
+                    ? "Chọn vị trí này"
+                    : "Pick this location"}
+                </div>
+                <MapPin
+                  class="h-8 w-8 text-rose-500 drop-shadow-md group-hover:scale-110 transition-transform"
+                />
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#101C29] flex justify-end space-x-3">
-        <button onclick={() => showMapModal = false} class="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl transition cursor-pointer">
-          {$language === 'vi' ? 'Huỷ' : 'Cancel'}
-        </button>
-        <button
-          onclick={() => {
-            newOrderProvince = '';
-            newOrderDistrict = '';
-            newOrderWard = '';
-            newOrderSpecificAddress = mapSearchQuery;
-            showMapModal = false;
-          }}
-          disabled={!mapSearchQuery.trim()}
-          class="px-5 py-2 text-sm font-bold text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 rounded-xl shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        <div
+          class="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#101C29] flex justify-end space-x-3"
         >
-          {$language === 'vi' ? 'Xác nhận địa chỉ' : 'Confirm Address'}
-        </button>
+          <button
+            onclick={() => (showMapModal = false)}
+            class="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl transition cursor-pointer"
+          >
+            {$language === "vi" ? "Huỷ" : "Cancel"}
+          </button>
+          <button
+            onclick={() => {
+              newOrderProvince = "";
+              newOrderDistrict = "";
+              newOrderWard = "";
+              newOrderSpecificAddress = mapSearchQuery;
+              showMapModal = false;
+            }}
+            disabled={!mapSearchQuery.trim()}
+            class="px-5 py-2 text-sm font-bold text-white bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 rounded-xl shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {$language === "vi" ? "Xác nhận địa chỉ" : "Confirm Address"}
+          </button>
+        </div>
       </div>
     </div>
-  </div>
-{/if}
-
+  {/if}
 </DashboardLayout>
 
 <!-- POPUP MODAL: CHI TIẾT BẢN GHI KIỂM TRA KẾT NỐI MẠNG CỦA KHÁCH HÀNG -->
 <ConnectionTestModal
   isOpen={isTestRecordsModalOpen}
-  connection={connection}
+  {connection}
   connectionsList={connection ? [connection] : $connections}
   onClose={() => {
     isTestRecordsModalOpen = false;

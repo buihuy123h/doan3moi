@@ -55,6 +55,12 @@ public partial class Order
 
     public decimal BulkDiscountPercent { get; set; }
 
+    /// <summary>
+    /// Đơn trên 50 kết nối được miễn tiền cọc. Cột tính toán trong SQL Server
+    /// (scripts/sql/2026-09-28_deposit-waiver.sql) — chỉ đọc, EF không ghi vào.
+    /// </summary>
+    public bool DepositWaived { get; set; }
+
     public string? ExistingLandlineAccountId { get; set; }
 
     public bool? LandlineFeasible { get; set; }

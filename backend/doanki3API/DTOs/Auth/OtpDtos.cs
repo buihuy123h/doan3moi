@@ -22,6 +22,15 @@ public sealed class VerifyLoginOtpRequest
     public string Otp { get; set; } = null!;
 }
 
+/// <summary>Khách quên mã tài khoản: nhập email để nhận lại mã.</summary>
+public sealed class ForgotAccountIdRequest
+{
+    [Required(ErrorMessage = "Vui lòng nhập email.")]
+    [EmailAddress(ErrorMessage = "Email không hợp lệ.")]
+    [StringLength(100, ErrorMessage = "Email không hợp lệ.")]
+    public string Email { get; set; } = null!;
+}
+
 /// <summary>Kết quả gửi OTP — email được che bớt để không lộ thông tin khách.</summary>
 public sealed record RequestLoginOtpResponse(
     string MaskedEmail,

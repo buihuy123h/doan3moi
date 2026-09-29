@@ -74,11 +74,17 @@
     void notificationStore.markRead(item.id);
     closeDropdown();
 
-    // 2. Chuyển vai trò nếu thông báo thuộc dashboard khác, để ProtectedRoute cho qua.
-    //    Thông báo của khách hàng (targetRole 'user') thì giữ nguyên phiên đang đăng nhập.
+    // 2. Không tự đổi vai trò nữa: loginAsStaff() xoá JWT, sau đó mọi API /api/Technical
+    //    đều bị 401 và dashboard trống trơn. Mỗi vai trò chỉ nhận thông báo trỏ về dashboard
+    //    của chính mình, nên gặp thông báo lệch vai trò thì chỉ đánh dấu đã đọc.
     const targetRole = item.targetRole as RoleType | null;
-    if (targetRole && targetRole !== 'user' && $currentUser?.role !== targetRole) {
-      authStore.loginAsStaff(targetRole);
+    if (targetRole && $currentUser?.role !== targetRole) {
+      toast.info(
+        $language === 'vi'
+          ? `Mục này thuộc vai trò khác (${item.sectionVi}).`
+          : `This item belongs to another role (${item.sectionEn}).`
+      );
+      return;
     }
 
     // 3. Điều hướng — thông báo chat mở thẳng phiên chat tương ứng

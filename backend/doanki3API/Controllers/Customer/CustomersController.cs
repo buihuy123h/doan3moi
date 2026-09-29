@@ -2,6 +2,7 @@ using System.Security.Claims;
 using doanki3API.Constants;
 using doanki3API.Data;
 using doanki3API.Models;
+using doanki3API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +28,8 @@ public sealed record CustomerPaymentDto(
 public sealed record CustomerBillDto(
     string BillId,
     string InvoiceNumber,
+    // "Hóa đơn của cái gì" — thống nhất với BillResponse của kế toán.
+    string Description,
     string AccountId,
     string? CustomerName,
     string BillingMonth,
@@ -85,11 +88,15 @@ public class CustomersController : ControllerBase
                      || b.AccountId == clean
                      || (dashed != null && b.AccountId == dashed))
             .OrderByDescending(b => b.GeneratedDate)
-            .Select(b => new CustomerBillDto(
+            // EF không dịch được hàm C# (BuildInvoiceDescription) trong projection nên
+            // chiếu dữ liệu thô trước, ghép Description sau khi đã materialize.
+            .Select(b => new
+            {
                 b.BillId,
                 b.InvoiceNumber,
                 b.AccountId,
-                b.Account.Order != null ? b.Account.Order.Customer.FullName : null,
+                CustomerName = b.Account.Order != null ? b.Account.Order.Customer.FullName : null,
+                PlanName = b.Account.Order != null ? b.Account.Order.Plan.Name : null,
                 b.BillingMonth,
                 b.BillingDate,
                 b.DueDate,
@@ -107,7 +114,7 @@ public class CustomersController : ControllerBase
                 b.DueAmount,
                 b.Status,
                 b.GeneratedDate,
-                b.Payments
+                Payments = b.Payments
                     .OrderByDescending(p => p.PaymentDate)
                     .Select(p => new CustomerPaymentDto(
                         p.PaymentId,
@@ -117,10 +124,39 @@ public class CustomersController : ControllerBase
                         p.PaymentMode,
                         p.ReferenceNumber,
                         p.Notes))
-                    .ToList()))
+                    .ToList()
+            })
             .ToListAsync(cancellationToken);
 
-        return Ok(bills);
+        return Ok(bills.Select(b => new CustomerBillDto(
+            b.BillId,
+            b.InvoiceNumber,
+            BillingService.BuildInvoiceDescription(
+                b.PlanName,
+                b.BillingMonth,
+                b.HourlyCharges,
+                b.SecurityDeposit,
+                b.LateFeeAmount),
+            b.AccountId,
+            b.CustomerName,
+            b.BillingMonth,
+            b.BillingDate,
+            b.DueDate,
+            b.SecurityDeposit,
+            b.MonthlyRental,
+            b.HourlyCharges,
+            b.DiscountPercent,
+            b.DiscountAmount,
+            b.Subtotal,
+            b.ServiceTaxRate,
+            b.ServiceTaxAmount,
+            b.LateFeeAmount,
+            b.TotalAmount,
+            b.AmountPaid,
+            b.DueAmount,
+            b.Status,
+            b.GeneratedDate,
+            b.Payments)));
     }
 
     [HttpPut("profile")]

@@ -182,42 +182,6 @@ const refresh = async () => {
   if (key) await loadHistory(key);
 };
 
-const addNotification = (item: {
-  id?: string;
-  type?: NotificationDto['type'];
-  titleVi: string;
-  titleEn: string;
-  descVi: string;
-  descEn: string;
-  targetPath?: string;
-  targetTab?: string;
-  targetRole?: string;
-  sectionVi?: string;
-  sectionEn?: string;
-  entityId?: string;
-  replaceKey?: string;
-}) => {
-  const newNotif: NotificationDto = {
-    id: item.id || `notif-${Date.now()}`,
-    type: item.type || 'order',
-    titleVi: item.titleVi,
-    titleEn: item.titleEn,
-    descVi: item.descVi,
-    descEn: item.descEn,
-    createdAt: new Date().toISOString(),
-    read: false,
-    audience: get(audience) || 'account:USER',
-    targetPath: item.targetPath || '',
-    targetTab: item.targetTab || '',
-    targetRole: item.targetRole || null,
-    sectionVi: item.sectionVi || '',
-    sectionEn: item.sectionEn || '',
-    entityId: item.entityId || null,
-    replaceKey: item.replaceKey || null,
-  };
-  notifications.update((list) => [newNotif, ...list.filter((n) => n.id !== newNotif.id)].slice(0, MAX_ITEMS));
-};
-
 // Mở kết nối ngay khi ứng dụng khởi động: khách chưa đăng nhập vẫn cần kênh này
 // cho chatbox trang chủ.
 void startRealtime();
@@ -232,6 +196,7 @@ export const notificationStore = {
   markRead,
   markAllRead,
   refresh,
-  addNotification,
+  // Cố ý KHÔNG có hàm "thêm thông báo cục bộ": thông báo nào cũng phải do backend tạo
+  // và lưu vào CSDL, nếu không sẽ lại có loại thông báo chỉ hiện trên trình duyệt.
 };
 

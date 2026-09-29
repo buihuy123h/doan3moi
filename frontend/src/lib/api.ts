@@ -166,6 +166,28 @@ export async function requestLoginOtpApi(accountId: string): Promise<RequestLogi
   return (await res.json()) as RequestLoginOtpResponse;
 }
 
+/**
+ * Khách quên / chưa nhận được mã tài khoản: gửi lại mã về email đã đăng ký.
+ * Server luôn trả cùng một câu (không tiết lộ email có tồn tại hay không).
+ */
+export async function forgotAccountIdApi(email: string): Promise<{ message: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}/api/auth/otp/forgot-account-id`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    throw new ApiError('network');
+  }
+
+  if (!res.ok) {
+    return throwApiError(res, `Không gửi được yêu cầu (HTTP ${res.status})`);
+  }
+  return (await res.json()) as { message: string };
+}
+
 /** Bước 2: gửi mã OTP khách nhập, đúng thì nhận JWT và thông tin tài khoản. */
 export async function verifyLoginOtpApi(
   accountId: string,
@@ -376,6 +398,19 @@ export async function fetchBillsApi() {
   });
   if (!res.ok) {
     throw new Error(`Lỗi tải danh sách hóa đơn (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+/** GET /api/billing/bills/{id} — nhận BillId hoặc số hóa đơn, dùng cho xuất PDF
+ *  để hóa đơn luôn phản ánh dữ liệu mới nhất từ CSDL (kể cả payment vừa ghi). */
+export async function fetchBillByIdApi(billIdOrInvoiceNumber: string) {
+  const res = await fetch(
+    `${API_BASE_URL}/api/billing/bills/${encodeURIComponent(billIdOrInvoiceNumber)}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) {
+    throw new Error(`Lỗi tải hóa đơn ${billIdOrInvoiceNumber} (HTTP ${res.status})`);
   }
   return await res.json();
 }
@@ -753,13 +788,55 @@ export async function updateVendorApi(id: string, data: any) {
 }
 
 // --- ORDERS ---
-export async function createOrderApi(data: any) {
-  const res = await fetch(`${API_BASE_URL}/api/Technical/orders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error(await res.text());
+/**
+ * Ghi một đơn đăng ký dịch vụ vào CSDL. Trả về đơn do server tạo (mã đơn là mã thật).
+ * Ném ApiError kèm câu tiếng Việt dễ hiểu để trang gọi hiện thẳng cho người dùng.
+ */
+export async function createOrderApi(
+  data: any,
+  options: { selfService?: boolean } = {}
+): Promise<{ orderId: string; status?: string; depositWaived?: boolean }> {
+  // selfService: trang đăng ký công khai gọi /api/public/orders (không cần JWT), nhờ vậy
+  // khách cũ mua thêm bằng email đã dùng không bị chặn 401 như ở /api/Technical/orders.
+  const url = options.selfService
+    ? `${API_BASE_URL}/api/public/orders`
+    : `${API_BASE_URL}/api/Technical/orders`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.selfService ? {} : authHeaders()),
+      },
+      body: JSON.stringify(data),
+    });
+  } catch {
+    throw new ApiError('network');
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    throw new ApiError(
+      'Phiên đăng nhập không hợp lệ hoặc đã hết hạn, đơn chưa được lưu. Vui lòng đăng nhập lại rồi đặt đơn.',
+      res.status
+    );
+  }
+
+  if (!res.ok) {
+    let message = `Không lưu được đơn hàng (HTTP ${res.status}).`;
+    try {
+      const body = await res.json();
+      const details = body?.errors
+        ? Object.values(body.errors as Record<string, string[]>).flat().join('; ')
+        : '';
+      message = details || body?.message || body?.error || message;
+    } catch {
+      // Giữ thông báo mặc định khi server không trả JSON
+    }
+    throw new ApiError(message, res.status);
+  }
+
   return await res.json();
 }
 
@@ -1016,3 +1093,97 @@ export async function deletePurchaseOrderApi(id: string): Promise<void> {
     throw new Error(err.message || `Lỗi xóa đơn đặt mua (HTTP ${res.status})`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Equipment Requests (Yêu cầu nhập thiết bị / vật tư từ KTV gửi Admin)
+// ---------------------------------------------------------------------------
+
+export interface EquipmentRequestDto {
+  requestId: string;
+  orderId?: string | null;
+  storeId: string;
+  storeName?: string;
+  employeeId: string;
+  employeeName?: string;
+  inventoryId?: string | null;
+  itemName: string;
+  deviceType: string;
+  quantity: number;
+  urgency: 'Low' | 'Normal' | 'High' | 'Urgent';
+  status: 'Pending' | 'Approved' | 'Fulfilled' | 'Rejected';
+  reason?: string | null;
+  adminNotes?: string | null;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
+export async function fetchEquipmentRequestsApi(filters?: {
+  status?: string;
+  storeId?: string;
+  search?: string;
+}): Promise<EquipmentRequestDto[]> {
+  const params = new URLSearchParams();
+  if (filters?.status && filters.status !== 'all') params.set('status', filters.status);
+  if (filters?.storeId) params.set('storeId', filters.storeId);
+  if (filters?.search) params.set('search', filters.search);
+
+  const qs = params.toString();
+  const url = `${API_BASE_URL}/api/technical/equipment-requests${qs ? `?${qs}` : ''}`;
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Lỗi tải danh sách yêu cầu nhập hàng (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function createEquipmentRequestApi(data: {
+  orderId?: string | null;
+  storeId: string;
+  inventoryId?: string | null;
+  itemName: string;
+  deviceType: string;
+  quantity: number;
+  urgency?: string;
+  reason?: string | null;
+}): Promise<EquipmentRequestDto> {
+  const res = await fetch(`${API_BASE_URL}/api/technical/equipment-requests`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Lỗi gửi yêu cầu nhập hàng (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function updateEquipmentRequestStatusApi(
+  id: string,
+  status: string,
+  adminNotes?: string
+): Promise<EquipmentRequestDto> {
+  const res = await fetch(`${API_BASE_URL}/api/admin/equipment-requests/${encodeURIComponent(id)}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ status, adminNotes }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Lỗi cập nhật trạng thái yêu cầu nhập hàng (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function deleteEquipmentRequestApi(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/technical/equipment-requests/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Lỗi xóa yêu cầu nhập hàng (HTTP ${res.status})`);
+  }
+}
+

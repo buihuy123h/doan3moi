@@ -37,12 +37,18 @@
     CalendarClock,
     History,
     PackageOpen,
+    Send,
+    Truck,
+    Inbox,
+    PackageCheck,
+    Store,
   } from "lucide-svelte";
   import type {
     Connection,
     Order,
     ConnectionStatus,
     Equipment,
+    EquipmentRequest,
     OrderStatus,
   } from "../types/nexus";
   import { isReleasedToTechnical } from "../types/nexus";
@@ -52,6 +58,7 @@
   import ConnectionTestModal from "../components/modals/ConnectionTestModal.svelte";
   import { queryParam, activeTabOverride } from "../lib/router";
   import { getPlanName } from "../lib/planI18n";
+  import Pagination from "../components/common/Pagination.svelte";
   import {
     TechnicalApiError,
     type ConnectionActivityLog,
@@ -70,11 +77,24 @@
     | "feasibility-queue"
     | "connection-manager"
     | "equipment-tracker"
+    | "equipment-requests"
     | "network-diagnostics"
     | "settings"
     | "profile";
 
-  const { orders, connections, equipments, inventory, employees, updateOrderStatus, addEquipment } = nexusStore;
+  const {
+    orders,
+    connections,
+    equipments,
+    inventory,
+    employees,
+    retailShops,
+    updateOrderStatus,
+    addEquipment,
+    equipmentRequests,
+    refreshEquipmentRequests,
+    addEquipmentRequest,
+  } = nexusStore;
   const { t, language } = languageStore;
 
   let isApiLoading = $state(true);
@@ -149,6 +169,7 @@
       "feasibility-queue",
       "connection-manager",
       "equipment-tracker",
+      "equipment-requests",
       "settings",
       "profile",
     ];
@@ -229,6 +250,22 @@
       return matchesSearch && matchesStatus && matchesType;
     }),
   );
+
+  // Connection Manager Pagination
+  let connCurrentPage = $state(1);
+  const connItemsPerPage = 10;
+  const paginatedConnections = $derived(
+    filteredConnections.slice(
+      (connCurrentPage - 1) * connItemsPerPage,
+      connCurrentPage * connItemsPerPage
+    )
+  );
+  $effect(() => {
+    techAccountSearch;
+    connStatusFilter;
+    connTypeFilter;
+    connCurrentPage = 1;
+  });
 
   const loadActivityLogs = async (accountId: string) => {
     activityLogsLoading = accountId;
@@ -719,6 +756,128 @@
     }
   };
 
+  // State & Handlers for Equipment Requests to Admin (Yêu cầu nhập hàng)
+  let isEquipmentRequestModalOpen = $state(false);
+  let equipmentRequestForm = $state({
+    orderId: "",
+    storeId: "",
+    inventoryId: "",
+    itemName: "Huawei EchoLife HG8245H5 GPON ONT",
+    deviceType: "Fiber ONT Modem",
+    quantity: 1,
+    urgency: "Normal" as "Low" | "Normal" | "High" | "Urgent",
+    reason: "",
+  });
+  let requestSearch = $state("");
+  let requestStatusFilter = $state<"all" | EquipmentRequest["status"]>("all");
+
+  const filteredEquipmentRequests = $derived(
+    $equipmentRequests.filter((r) => {
+      const matchesStatus =
+        requestStatusFilter === "all" || r.status === requestStatusFilter;
+      const term = requestSearch.toLowerCase().trim();
+      const matchesSearch =
+        !term ||
+        r.id.toLowerCase().includes(term) ||
+        r.itemName.toLowerCase().includes(term) ||
+        (r.orderId && r.orderId.toLowerCase().includes(term)) ||
+        (r.storeName && r.storeName.toLowerCase().includes(term)) ||
+        (r.reason && r.reason.toLowerCase().includes(term));
+      return matchesStatus && matchesSearch;
+    })
+  );
+
+  // Equipment Requests Pagination
+  let eqReqCurrentPage = $state(1);
+  const eqReqItemsPerPage = 8;
+  const paginatedEquipmentRequests = $derived(
+    filteredEquipmentRequests.slice(
+      (eqReqCurrentPage - 1) * eqReqItemsPerPage,
+      eqReqCurrentPage * eqReqItemsPerPage
+    )
+  );
+  $effect(() => {
+    requestSearch;
+    requestStatusFilter;
+    eqReqCurrentPage = 1;
+  });
+
+  function openEquipmentRequestModal(order?: Order | null) {
+    const defaultStore = order?.retailOutletCode || $retailShops[0]?.id || "SH-01";
+    let defaultItemName = "Huawei EchoLife HG8245H5 GPON ONT";
+    let defaultDeviceType = "Fiber ONT Modem";
+    let defaultInventoryId = "";
+
+    if (order) {
+      if (order.connectionType === "Broadband") {
+        defaultItemName = "Huawei EchoLife HG8245H5 GPON ONT";
+        defaultDeviceType = "Fiber ONT Modem";
+      } else if (order.connectionType === "Landline") {
+        defaultItemName = "Grandstream HT802 2-Port Analog VoIP Adapter";
+        defaultDeviceType = "Analog Telephone Adapter";
+      } else {
+        defaultItemName = "USRobotics 56K V.92 Faxmodem USB/PSTN";
+        defaultDeviceType = "VDSL2/ADSL Modem";
+      }
+    }
+
+    const matchedInv = $inventory.find((i) =>
+      i.name.toLowerCase().includes(defaultItemName.toLowerCase().slice(0, 8))
+    );
+    if (matchedInv) {
+      defaultInventoryId = matchedInv.id;
+      defaultItemName = matchedInv.name;
+    }
+
+    equipmentRequestForm = {
+      orderId: order?.id || "",
+      storeId: defaultStore,
+      inventoryId: defaultInventoryId,
+      itemName: defaultItemName,
+      deviceType: defaultDeviceType,
+      quantity: order ? Math.max(1, order.bulkConnectionsCount || 1) : 1,
+      urgency: order ? "High" : "Normal",
+      reason: order
+        ? ($language === "vi"
+            ? `Kho chi nhánh ${defaultStore} hết thiết bị để cấp kết nối cho đơn hàng #${order.id}.`
+            : `Branch ${defaultStore} is out of hardware units to provision order #${order.id}.`)
+        : "",
+    };
+    isEquipmentRequestModalOpen = true;
+  }
+
+  async function handleSubmitEquipmentRequest(e?: Event) {
+    if (e) e.preventDefault();
+    if (!equipmentRequestForm.storeId || !equipmentRequestForm.itemName) {
+      toast.error(
+        $language === "vi"
+          ? "Vui lòng chọn chi nhánh và nhập tên thiết bị."
+          : "Please select branch and enter item name."
+      );
+      return;
+    }
+    try {
+      await addEquipmentRequest({
+        orderId: equipmentRequestForm.orderId || null,
+        storeId: equipmentRequestForm.storeId,
+        inventoryId: equipmentRequestForm.inventoryId || null,
+        itemName: equipmentRequestForm.itemName,
+        deviceType: equipmentRequestForm.deviceType,
+        quantity: Math.max(1, equipmentRequestForm.quantity),
+        urgency: equipmentRequestForm.urgency,
+        reason: equipmentRequestForm.reason || null,
+      });
+      isEquipmentRequestModalOpen = false;
+      toast.success(
+        $language === "vi"
+          ? "Đã gửi yêu cầu nhập hàng tới Admin thành công! Admin sẽ duyệt và nhập thiết bị về kho."
+          : "Equipment request submitted to Admin successfully!"
+      );
+    } catch (err: any) {
+      toast.error(err?.message || "Lỗi khi gửi yêu cầu nhập hàng");
+    }
+  }
+
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast.success(`Copied ${label}: ${text}`);
@@ -775,6 +934,21 @@
     }),
   );
 
+  // Feasibility Queue Pagination
+  let ordersCurrentPage = $state(1);
+  const ordersItemsPerPage = 8;
+  const paginatedOrders = $derived(
+    filteredOrders.slice(
+      (ordersCurrentPage - 1) * ordersItemsPerPage,
+      ordersCurrentPage * ordersItemsPerPage
+    )
+  );
+  $effect(() => {
+    queueStatusFilter;
+    queueSearch;
+    ordersCurrentPage = 1;
+  });
+
   // State for Customer Network Connection Diagnostics Modal
   let isTestRecordsModalOpen = $state(false);
   let targetConnectionForTestModal = $state<Connection | null>(null);
@@ -783,6 +957,47 @@
     targetConnectionForTestModal = conn || null;
     isTestRecordsModalOpen = true;
   }
+
+  // Equipment Tracker Search & Pagination
+  let eqSearch = $state("");
+  let eqStatusFilter = $state<"All" | Equipment["status"]>("All");
+  let eqCurrentPage = $state(1);
+  const eqItemsPerPage = 10;
+  const filteredEquipments = $derived(
+    $equipments.filter((eq) => {
+      const matchesStatus = eqStatusFilter === "All" || eq.status === eqStatusFilter;
+      const q = eqSearch.trim().toLowerCase();
+      const matchesSearch =
+        !q ||
+        eq.serialNumber.toLowerCase().includes(q) ||
+        eq.macAddress.toLowerCase().includes(q) ||
+        eq.model.toLowerCase().includes(q) ||
+        (eq.assignedAccountId || "").toLowerCase().includes(q) ||
+        (eq.customerName || "").toLowerCase().includes(q);
+      return matchesStatus && matchesSearch;
+    })
+  );
+  const paginatedEquipments = $derived(
+    filteredEquipments.slice(
+      (eqCurrentPage - 1) * eqItemsPerPage,
+      eqCurrentPage * eqItemsPerPage
+    )
+  );
+  $effect(() => {
+    eqSearch;
+    eqStatusFilter;
+    eqCurrentPage = 1;
+  });
+
+  // Inventory Stock Pagination
+  let invCurrentPage = $state(1);
+  const invItemsPerPage = 8;
+  const paginatedInventory = $derived(
+    $inventory.slice(
+      (invCurrentPage - 1) * invItemsPerPage,
+      invCurrentPage * invItemsPerPage
+    )
+  );
 
   const technicalNavItems: NavItem[] = $derived([
     {
@@ -803,6 +1018,13 @@
       label: $t.techNav.equipmentTracker,
       icon: HardDrive,
       badge: $equipments.length,
+    },
+    {
+      id: "equipment-requests",
+      label: $language === "vi" ? "Yêu cầu nhập hàng" : "Equipment Requests",
+      icon: Truck,
+      badge: $equipmentRequests.filter((r) => r.status === "Pending").length || undefined,
+      badgeColor: "bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300",
     },
     {
       id: "network-diagnostics",
@@ -826,6 +1048,7 @@
     isProvisionModalOpen = false;
     isNotFeasibleModalOpen = false;
     isAddEquipmentModalOpen = false;
+    isEquipmentRequestModalOpen = false;
     expandedAccountId = null;
     selectedConnection = null;
   }}
@@ -838,21 +1061,15 @@
         onClick: openAddEquipmentModal,
         icon: Plus,
       }
+    : activeTab === "equipment-requests"
+    ? {
+        label: $language === "vi" ? "Gửi yêu cầu nhập hàng" : "New Import Request",
+        onClick: () => openEquipmentRequestModal(null),
+        icon: Plus,
+      }
     : undefined}
 >
-  {#snippet customHeaderActions()}
-    <button
-      type="button"
-      onclick={() => openTestRecordsModal(null)}
-      class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer"
-      title={$language === "vi" ? "Mở popup hiển thị đầy đủ chi tiết các bản ghi kiểm tra kết nối mạng của khách hàng" : "Open customer network diagnostics modal"}
-    >
-      <Activity class="h-3.5 w-3.5" />
-      <span class="hidden sm:inline">{$language === "vi" ? "Các bản ghi đo kiểm mạng" : "Network Records"}</span>
-      <span class="sm:hidden">{$language === "vi" ? "Bản ghi mạng" : "Records"}</span>
-      <span class="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">{$connections.length}</span>
-    </button>
-  {/snippet}
+
   {#if isApiLoading || apiError}
     <div
       class="mb-4 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm {apiError
@@ -1028,7 +1245,7 @@
             <tbody
               class="divide-y divide-slate-200 dark:divide-slate-800/60 font-sans"
             >
-              {#each filteredOrders as order (order.id)}
+              {#each paginatedOrders as order (order.id)}
                 {@const provConns = getOrderProvisionedConnections(order.id)}
                 {@const totalReq = Math.max(1, order.bulkConnectionsCount || 1)}
                 <tr
@@ -1335,6 +1552,7 @@
           </table>
         </div>
       </div>
+      <Pagination bind:currentPage={ordersCurrentPage} totalItems={filteredOrders.length} pageSize={ordersItemsPerPage} />
     </div>
   {/if}
 
@@ -1709,7 +1927,7 @@
               <tbody
                 class="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans"
               >
-                {#each filteredConnections as conn (conn.accountId)}
+                {#each paginatedConnections as conn (conn.accountId)}
                   {@const isExpanded = expandedAccountId === conn.accountId}
                   <!-- Table Main Row -->
                   <tr
@@ -2527,6 +2745,7 @@
           </div>
         {/if}
       </div>
+      <Pagination bind:currentPage={connCurrentPage} totalItems={filteredConnections.length} pageSize={connItemsPerPage} />
     </div>
   {/if}
 
@@ -2585,6 +2804,30 @@
         </div>
       </div>
 
+      <!-- Search & Filter Controls for Equipment Tracker -->
+      <div class="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div class="relative w-full sm:w-80">
+          <Search class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            placeholder={$language === "vi" ? "Tìm theo Serial, MAC, Model, Thuê bao..." : "Search by Serial, MAC, Model, Subscriber..."}
+            bind:value={eqSearch}
+            class="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+          />
+        </div>
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <select
+            bind:value={eqStatusFilter}
+            class="px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 font-medium"
+          >
+            <option value="All">{$language === "vi" ? "Tất cả trạng thái" : "All Status"}</option>
+            <option value="In Stock">{$language === "vi" ? "Trong kho" : "In Stock"}</option>
+            <option value="In Service">{$language === "vi" ? "Đang vận hành" : "In Service"}</option>
+            <option value="Faulty">{$language === "vi" ? "Hỏng / Lỗi" : "Faulty"}</option>
+          </select>
+        </div>
+      </div>
+
       <!-- Equipment Grid / Table -->
       <div
         class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
@@ -2631,7 +2874,7 @@
             <tbody
               class="divide-y divide-slate-200 dark:divide-slate-800/60 text-xs font-mono"
             >
-              {#each $equipments as eq (eq.id)}
+              {#each paginatedEquipments as eq (eq.id)}
                 <tr
                   class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition"
                 >
@@ -2710,6 +2953,7 @@
           </table>
         </div>
       </div>
+      <Pagination bind:currentPage={eqCurrentPage} totalItems={filteredEquipments.length} pageSize={eqItemsPerPage} />
 
       <div
         class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
@@ -2750,7 +2994,7 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-              {#each $inventory as item (item.id)}
+              {#each paginatedInventory as item (item.id)}
                 <tr
                   class:item-low-stock={item.stockQuantity <= item.reorderLevel}
                 >
@@ -2794,6 +3038,198 @@
           </table>
         </div>
       </div>
+      <Pagination bind:currentPage={invCurrentPage} totalItems={$inventory.length} pageSize={invItemsPerPage} />
+    </div>
+  {/if}
+
+  <!-- TAB: EQUIPMENT REQUESTS (YÊU CẦU NHẬP HÀNG TỚI ADMIN) -->
+  {#if activeTab === "equipment-requests"}
+    <div class="tab-content-animate space-y-4">
+      <!-- Info notice -->
+      <div
+        class="flex items-start justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 border border-amber-200 dark:border-amber-900/50 shadow-xs"
+      >
+        <div class="flex items-start gap-3">
+          <Truck class="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <h4 class="text-xs font-bold text-amber-900 dark:text-amber-200">
+              {$language === "vi" ? "Yêu cầu nhập thiết bị / vật tư gửi Admin" : "Equipment Import Requests to Admin"}
+            </h4>
+            <p class="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
+              {$language === "vi"
+                ? "Khi kho chi nhánh hết hoặc thiếu thiết bị để cấp kết nối cho khách hàng, kỹ thuật viên gửi yêu cầu nhập hàng tại đây. Admin sẽ xem danh sách mặt hàng cần nhập và tiến hành nhập hàng về kho."
+                : "When your branch lacks equipment to provide connections, submit an import request here. Admin will review the requested items and stock them into your branch inventory."}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onclick={() => openEquipmentRequestModal(null)}
+          class="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+        >
+          <Plus class="h-4 w-4" />
+          {$language === "vi" ? "Gửi yêu cầu mới" : "New Request"}
+        </button>
+      </div>
+
+      <!-- KPI Summary Cards -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+          <div class="text-[10px] uppercase font-bold tracking-wider text-slate-500">{$language === "vi" ? "Tổng yêu cầu" : "Total Requests"}</div>
+          <div class="text-xl font-bold font-mono text-slate-900 dark:text-white mt-1">{$equipmentRequests.length}</div>
+        </div>
+        <div class="p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-xs">
+          <div class="text-[10px] uppercase font-bold tracking-wider text-amber-700 dark:text-amber-400">{$language === "vi" ? "Chờ duyệt" : "Pending"}</div>
+          <div class="text-xl font-bold font-mono text-amber-700 dark:text-amber-400 mt-1">
+            {$equipmentRequests.filter((r) => r.status === "Pending").length}
+          </div>
+        </div>
+        <div class="p-3.5 rounded-xl border border-blue-200 dark:border-blue-900/50 bg-blue-50/50 dark:bg-blue-950/20 shadow-xs">
+          <div class="text-[10px] uppercase font-bold tracking-wider text-blue-700 dark:text-blue-400">{$language === "vi" ? "Admin đã duyệt" : "Approved"}</div>
+          <div class="text-xl font-bold font-mono text-blue-700 dark:text-blue-400 mt-1">
+            {$equipmentRequests.filter((r) => r.status === "Approved").length}
+          </div>
+        </div>
+        <div class="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/50 dark:bg-emerald-950/20 shadow-xs">
+          <div class="text-[10px] uppercase font-bold tracking-wider text-emerald-700 dark:text-emerald-400">{$language === "vi" ? "Đã nhập về kho" : "Fulfilled"}</div>
+          <div class="text-xl font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-1">
+            {$equipmentRequests.filter((r) => r.status === "Fulfilled").length}
+          </div>
+        </div>
+      </div>
+
+      <!-- Filters & Search -->
+      <div class="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row gap-3 items-center justify-between">
+        <div class="relative w-full sm:w-80">
+          <Search class="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder={$language === "vi" ? "Tìm mã yêu cầu, thiết bị, đơn hàng..." : "Search requests, devices, orders..."}
+            bind:value={requestSearch}
+            class="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
+          />
+        </div>
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <Filter class="h-3.5 w-3.5 text-slate-400" />
+          <select
+            bind:value={requestStatusFilter}
+            class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 outline-none"
+          >
+            <option value="all">{$language === "vi" ? "Tất cả trạng thái" : "All Statuses"}</option>
+            <option value="Pending">{$language === "vi" ? "Chờ duyệt" : "Pending"}</option>
+            <option value="Approved">{$language === "vi" ? "Đã duyệt" : "Approved"}</option>
+            <option value="Fulfilled">{$language === "vi" ? "Đã nhập kho" : "Fulfilled"}</option>
+            <option value="Rejected">{$language === "vi" ? "Từ chối" : "Rejected"}</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Requests Table -->
+      <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-50 dark:bg-slate-800/60 text-slate-500 uppercase font-semibold text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th class="px-4 py-3">{$language === "vi" ? "Mã yêu cầu" : "Request ID"}</th>
+                <th class="px-4 py-3">{$language === "vi" ? "Mặt hàng cần nhập" : "Requested Item"}</th>
+                <th class="px-4 py-3">{$language === "vi" ? "Chi nhánh" : "Store"}</th>
+                <th class="px-4 py-3 text-center">{$language === "vi" ? "SL" : "Qty"}</th>
+                <th class="px-4 py-3 text-center">{$language === "vi" ? "Độ ưu tiên" : "Urgency"}</th>
+                <th class="px-4 py-3">{$language === "vi" ? "Đơn liên quan / Lý do" : "Order / Reason"}</th>
+                <th class="px-4 py-3 text-center">{$language === "vi" ? "Trạng thái" : "Status"}</th>
+                <th class="px-4 py-3">{$language === "vi" ? "Phản hồi Admin" : "Admin Note"}</th>
+                <th class="px-4 py-3">{$language === "vi" ? "Thời gian" : "Created At"}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+              {#if filteredEquipmentRequests.length > 0}
+                {#each paginatedEquipmentRequests as req (req.id)}
+                  <tr class="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition">
+                    <td class="px-4 py-3 font-mono font-bold text-amber-600 dark:text-amber-400">
+                      {req.id}
+                    </td>
+                    <td class="px-4 py-3">
+                      <div class="font-semibold text-slate-900 dark:text-white">{req.itemName}</div>
+                      <div class="text-[10px] text-slate-500">{req.deviceType}</div>
+                    </td>
+                    <td class="px-4 py-3 text-slate-700 dark:text-slate-300">
+                      <span class="inline-flex items-center gap-1 font-mono">
+                        <Store class="h-3 w-3 text-slate-400" />
+                        {req.storeName || req.storeId}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 text-center font-mono font-bold text-slate-900 dark:text-white">
+                      {req.quantity}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                      {#if req.urgency === "Urgent"}
+                        <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400">
+                          {$language === "vi" ? "Khẩn cấp" : "Urgent"}
+                        </span>
+                      {:else if req.urgency === "High"}
+                        <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
+                          {$language === "vi" ? "Cao" : "High"}
+                        </span>
+                      {:else}
+                        <span class="inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                          {$language === "vi" ? "Bình thường" : "Normal"}
+                        </span>
+                      {/if}
+                    </td>
+                    <td class="px-4 py-3 max-w-[200px]">
+                      {#if req.orderId}
+                        <div class="font-mono text-indigo-600 dark:text-indigo-400 font-semibold text-[11px]">
+                          #{req.orderId}
+                        </div>
+                      {/if}
+                      <div class="text-[11px] text-slate-600 dark:text-slate-400 truncate" title={req.reason || ""}>
+                        {req.reason || "—"}
+                      </div>
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                      {#if req.status === "Fulfilled"}
+                        <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400">
+                          <CheckCircle2 class="h-3 w-3" />
+                          {$language === "vi" ? "Đã nhập kho" : "Fulfilled"}
+                        </span>
+                      {:else if req.status === "Approved"}
+                        <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-400">
+                          <CheckCircle2 class="h-3 w-3" />
+                          {$language === "vi" ? "Đã duyệt" : "Approved"}
+                        </span>
+                      {:else if req.status === "Rejected"}
+                        <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400">
+                          <XCircle class="h-3 w-3" />
+                          {$language === "vi" ? "Từ chối" : "Rejected"}
+                        </span>
+                      {:else}
+                        <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
+                          <Clock class="h-3 w-3" />
+                          {$language === "vi" ? "Chờ duyệt" : "Pending"}
+                        </span>
+                      {/if}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-400 max-w-[150px] truncate" title={req.adminNotes || ""}>
+                      {req.adminNotes || "—"}
+                    </td>
+                    <td class="px-4 py-3 text-slate-500 font-mono text-[10px]">
+                      {req.createdAt}
+                    </td>
+                  </tr>
+                {/each}
+              {:else}
+                <tr>
+                  <td colspan="9" class="px-4 py-12 text-center text-slate-400 text-xs">
+                    <Truck class="h-8 w-8 mx-auto mb-2 opacity-40" />
+                    {$language === "vi" ? "Không có yêu cầu nhập hàng nào." : "No equipment requests found."}
+                  </td>
+                </tr>
+              {/if}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <Pagination bind:currentPage={eqReqCurrentPage} totalItems={filteredEquipmentRequests.length} pageSize={eqReqItemsPerPage} />
     </div>
   {/if}
 
@@ -3151,12 +3587,25 @@
                     : `${provisioningEquipments.length} hardware units available at this store.`}
                 </div>
               {:else}
-                <div
-                  class="p-3 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs"
-                >
-                  {$language === "vi"
-                    ? "Không có thiết bị nào trong kho sẵn sàng. Vui lòng nhập thêm thiết bị."
-                    : "No hardware units currently marked as 'In Stock'. Please register or return equipment."}
+                <div class="flex flex-col gap-2">
+                  <div
+                    class="p-3 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs"
+                  >
+                    {$language === "vi"
+                      ? "Không có thiết bị nào trong kho sẵn sàng. Vui lòng nhập thêm thiết bị."
+                      : "No hardware units currently marked as 'In Stock'. Please register or return equipment."}
+                  </div>
+                  <button
+                    type="button"
+                    onclick={() => {
+                      isProvisionModalOpen = false;
+                      openEquipmentRequestModal(targetOrderForProvision);
+                    }}
+                    class="self-start inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white text-xs font-semibold shadow-xs transition cursor-pointer"
+                  >
+                    <Send class="h-3.5 w-3.5" />
+                    {$language === "vi" ? "Gửi yêu cầu nhập hàng cho Admin" : "Request equipment from Admin"}
+                  </button>
                 </div>
               {/if}
             </div>
@@ -3429,6 +3878,197 @@
                 : $language === "vi"
                   ? "Xác nhận & Lưu kho"
                   : "Confirm & Save"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  <!-- MODAL: GỬI YÊU CẦU NHẬP HÀNG CHO ADMIN -->
+  {#if isEquipmentRequestModalOpen}
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4 overflow-y-auto"
+    >
+      <div
+        class="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-2xl space-y-4 my-8"
+      >
+        <div
+          class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3"
+        >
+          <div class="flex items-center gap-2.5">
+            <div class="p-2 rounded-xl bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">
+              <Truck class="h-5 w-5" />
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-slate-900 dark:text-white">
+                {$language === "vi"
+                  ? "Mẫu yêu cầu nhập hàng cho Admin"
+                  : "Equipment Import Request to Admin"}
+              </h3>
+              <p class="text-[11px] text-slate-500">
+                {$language === "vi"
+                  ? "Gửi yêu cầu để Admin xem xét và nhập hàng về chi nhánh."
+                  : "Submit request for Admin to review and restock items."}
+              </p>
+            </div>
+          </div>
+          <button
+            onclick={() => (isEquipmentRequestModalOpen = false)}
+            class="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg"
+          >
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        {#if equipmentRequestForm.orderId}
+          <div class="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-900 dark:text-indigo-200 flex items-center justify-between">
+            <span class="font-medium">
+              {$language === "vi" ? "Yêu cầu phục vụ đơn hàng:" : "Requested for customer order:"}
+            </span>
+            <span class="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+              #{equipmentRequestForm.orderId}
+            </span>
+          </div>
+        {/if}
+
+        <form
+          onsubmit={handleSubmitEquipmentRequest}
+          class="space-y-3.5 text-xs font-sans"
+        >
+          <!-- Chi nhánh & Mức độ ưu tiên -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                {$language === "vi" ? "Chi nhánh nhận hàng *" : "Destination Store *"}
+              </label>
+              <select
+                required
+                bind:value={equipmentRequestForm.storeId}
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                {#each $retailShops as s (s.id)}
+                  <option value={s.id}>{s.name} ({s.city})</option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                {$language === "vi" ? "Mức độ ưu tiên" : "Urgency"}
+              </label>
+              <select
+                bind:value={equipmentRequestForm.urgency}
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                <option value="Normal">{$language === "vi" ? "Bình thường" : "Normal"}</option>
+                <option value="High">{$language === "vi" ? "Cao (Đang chờ đơn)" : "High"}</option>
+                <option value="Urgent">{$language === "vi" ? "Khẩn cấp" : "Urgent"}</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Chọn từ kho vật tư catalog hoặc nhập tên -->
+          <div>
+            <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+              {$language === "vi" ? "Chọn danh mục vật tư kho (tùy chọn)" : "Catalog Item (optional)"}
+            </label>
+            <select
+              bind:value={equipmentRequestForm.inventoryId}
+              onchange={(e) => {
+                const invId = (e.target as HTMLSelectElement).value;
+                const found = $inventory.find((i) => i.id === invId);
+                if (found) {
+                  equipmentRequestForm.itemName = found.name;
+                  if (found.category === "Router") equipmentRequestForm.deviceType = "Gigabit Router";
+                  else if (found.category === "Fiber ONT") equipmentRequestForm.deviceType = "Fiber ONT Modem";
+                  else if (found.category === "VoIP Adapter") equipmentRequestForm.deviceType = "Analog Telephone Adapter";
+                  else if (found.category === "Modem") equipmentRequestForm.deviceType = "VDSL2/ADSL Modem";
+                }
+              }}
+              class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              <option value="">{$language === "vi" ? "-- Nhập tên thiết bị thủ công bên dưới --" : "-- Enter custom item below --"}</option>
+              {#each $inventory as item (item.id)}
+                <option value={item.id}>{item.itemCode} — {item.name} ({item.category})</option>
+              {/each}
+            </select>
+          </div>
+
+          <!-- Tên thiết bị & Loại thiết bị -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="sm:col-span-2">
+              <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                {$language === "vi" ? "Tên thiết bị / Model *" : "Item / Device Model *"}
+              </label>
+              <input
+                type="text"
+                required
+                bind:value={equipmentRequestForm.itemName}
+                placeholder="VD: Huawei EchoLife HG8245H5 GPON ONT"
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+                {$language === "vi" ? "Số lượng *" : "Quantity *"}
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="1000"
+                required
+                bind:value={equipmentRequestForm.quantity}
+                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500 font-mono text-center font-bold"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+              {$language === "vi" ? "Phân loại thiết bị" : "Device Type"}
+            </label>
+            <select
+              bind:value={equipmentRequestForm.deviceType}
+              class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              <option value="Fiber ONT Modem">Fiber ONT Modem</option>
+              <option value="Gigabit Router">Gigabit Router</option>
+              <option value="VDSL2/ADSL Modem">VDSL2/ADSL Modem</option>
+              <option value="Analog Telephone Adapter">Analog Telephone Adapter (ATA)</option>
+              <option value="Optical Splitter">Optical Splitter</option>
+              <option value="Patch Cord / SFP">Patch Cord / SFP Module</option>
+            </select>
+          </div>
+
+          <!-- Lý do / Ghi chú -->
+          <div>
+            <label class="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
+              {$language === "vi" ? "Lý do yêu cầu / Ghi chú cho Admin" : "Reason / Notes for Admin"}
+            </label>
+            <textarea
+              rows="3"
+              bind:value={equipmentRequestForm.reason}
+              placeholder={$language === "vi" ? "VD: Hết thiết bị Fiber ONT cấp kết nối cho đơn hàng B0000000002..." : "e.g. Out of ONT devices for order B0000000002..."}
+              class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500 text-xs"
+            ></textarea>
+          </div>
+
+          <div
+            class="flex items-center justify-end space-x-3 pt-3 border-t border-slate-200 dark:border-slate-800"
+          >
+            <button
+              type="button"
+              onclick={() => (isEquipmentRequestModalOpen = false)}
+              class="px-4 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              {$language === "vi" ? "Hủy bỏ" : "Cancel"}
+            </button>
+            <button
+              type="submit"
+              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white transition shadow-sm cursor-pointer"
+            >
+              <Send class="h-3.5 w-3.5" />
+              {$language === "vi" ? "Gửi yêu cầu cho Admin" : "Submit Request to Admin"}
             </button>
           </div>
         </form>

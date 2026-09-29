@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using doanki3API.Constants;
 using doanki3API.Data;
 using doanki3API.DTOs.Billing;
 using doanki3API.Models;
@@ -123,6 +125,14 @@ public sealed class BillingService
         if (securityDeposit <= 0m)
         {
             securityDeposit = connection?.Order?.Plan?.SecurityDeposit ?? 0m;
+        }
+
+        // Đơn trên 50 kết nối được miễn cọc (Orders.DepositWaived) — ghi 0 thẳng vào hoá
+        // đơn, kể cả khi màn hình kế toán vẫn gửi lên số tiền cọc gốc của gói cước.
+        if (connection?.Order is { } billedOrder &&
+            BulkDiscounts.IsDepositWaived(billedOrder.BulkConnectionsCount))
+        {
+            securityDeposit = 0m;
         }
 
         var discountAmount = request.DiscountAmount;
@@ -304,6 +314,40 @@ public sealed class BillingService
     private static decimal RoundCurrency(decimal value) =>
         Math.Round(value, 2, MidpointRounding.AwayFromZero);
 
+    /// <summary>
+    /// Mô tả hóa đơn "của cái gì" — đọc được cho cả khách hàng lẫn nhân viên:
+    /// gói cước nào, kỳ nào, gồm những khoản gì. Dùng chung cho BillResponse (kế toán)
+    /// và CustomerBillDto (cổng khách hàng) để mọi nơi diễn đạt thống nhất.
+    /// </summary>
+    public static string BuildInvoiceDescription(
+        string? planName,
+        string billingMonth,
+        decimal hourlyCharges,
+        decimal securityDeposit,
+        decimal lateFeeAmount)
+    {
+        var period = billingMonth;
+        if (DateTime.TryParseExact(billingMonth?.Trim(), "MMMM yyyy",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var monthDate))
+        {
+            // BillingMonth lưu dạng "September 2026" (khách Việt đọc "September" không tự nhiên).
+            period = $"tháng {monthDate.Month}/{monthDate.Year}";
+        }
+        else if (string.IsNullOrWhiteSpace(period))
+        {
+            period = DateTime.Now.ToString($"'tháng' M/yyyy");
+        }
+
+        var components = new List<string> { "cước thuê bao" };
+        if (hourlyCharges > 0m) components.Add("phí thuê thiết bị");
+        if (securityDeposit > 0m) components.Add("tiền cọc thiết bị");
+        if (lateFeeAmount > 0m) components.Add("phí nộp trễ");
+        components.Add("thuế dịch vụ");
+
+        var plan = string.IsNullOrWhiteSpace(planName) ? "viễn thông" : planName.Trim();
+        return $"Hóa đơn cước phí gói cước {plan} kỳ {period} (gồm {string.Join(", ", components)})";
+    }
+
     private static BillResponse MapToResponse(Bill b)
     {
         var customer = b.Account?.Order?.Customer;
@@ -327,6 +371,12 @@ public sealed class BillingService
         return new BillResponse(
             b.BillId,
             b.InvoiceNumber,
+            BuildInvoiceDescription(
+                plan?.Name,
+                b.BillingMonth,
+                b.HourlyCharges,
+                b.SecurityDeposit,
+                b.LateFeeAmount),
             b.AccountId,
             customer?.FullName ?? "Nexus Valued Subscriber",
             customer?.ContactNumber ?? "N/A",

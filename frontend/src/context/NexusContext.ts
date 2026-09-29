@@ -2,6 +2,8 @@ import { writable, get } from 'svelte/store';
 import {
   CONNECTION_TYPE_LETTER,
   getBulkDiscountPercent,
+  isDepositWaived,
+  DEPOSIT_WAIVER_MIN_CONNECTIONS,
   type Plan,
   type Employee,
   type Vendor,
@@ -14,6 +16,7 @@ import {
   type PaymentRecord,
   type Feedback,
   type PurchaseOrder,
+  type EquipmentRequest,
   type SystemSettings,
   type OrderStatus,
   type ConnectionStatus,
@@ -57,6 +60,10 @@ import {
   createPurchaseOrderApi,
   updatePurchaseOrderStatusApi,
   deletePurchaseOrderApi,
+  fetchEquipmentRequestsApi,
+  createEquipmentRequestApi,
+  updateEquipmentRequestStatusApi,
+  deleteEquipmentRequestApi,
   fetchPlansApi,
   fetchRetailShopsApi,
   fetchVendorsApi,
@@ -66,7 +73,7 @@ import {
   authHeaders,
 } from '../lib/api';
 
-export { getBulkDiscountPercent, isReleasedToTechnical, isAwaitingRetailApproval, RETAIL_STAGE_STATUSES };
+export { getBulkDiscountPercent, isDepositWaived, DEPOSIT_WAIVER_MIN_CONNECTIONS, isReleasedToTechnical, isAwaitingRetailApproval, RETAIL_STAGE_STATUSES };
 
 // 11-char Order ID: prefix D/B/T + 10-digit serial (e.g. D0000000001)
 export function generateOrderId(type: ConnectionType, count: number): string {
@@ -1199,6 +1206,7 @@ function createNexusStore() {
   const bills = writable<Bill[]>(loadFromStorage('nexus_bills' + V, INITIAL_BILLS));
   const feedbacks = writable<Feedback[]>(loadFromStorage('nexus_feedbacks' + V, INITIAL_FEEDBACKS));
   const purchaseOrders = writable<PurchaseOrder[]>([]);
+  const equipmentRequests = writable<EquipmentRequest[]>([]);
   const settings = writable<SystemSettings>(loadFromStorage('nexus_settings' + V, INITIAL_SETTINGS));
 
   // Auto-persist to localStorage on every change (mirrors React useEffect persistence)
@@ -1530,20 +1538,16 @@ function createNexusStore() {
     };
   };
 
-  const nextOrderIdSerial = (): number => {
-    const currentOrders = get(orders);
-    let maxSerial = 0;
-    for (const o of currentOrders) {
-      const num = parseInt(o.id.slice(1), 10);
-      if (!isNaN(num) && num > maxSerial) {
-        maxSerial = num;
-      }
-    }
-    return Math.max(currentOrders.length, maxSerial) + 1;
-  };
-
-  const placeOrder = (orderData: PlaceOrderInput): Order => {
-    const newId = generateOrderId(orderData.connectionType, nextOrderIdSerial());
+  // Ghi đơn vào CSDL rồi mới trả về. Trước đây hàm này gọi API kiểu "bắn rồi quên":
+  // API trả 401/400/500 thì đơn chỉ nằm trong bộ nhớ trình duyệt, trang đăng ký vẫn báo
+  // thành công, còn CSDL và màn hình Kỹ thuật không hề có đơn đó. Nay lỗi được ném ra
+  // để trang gọi hiện thông báo, và mã đơn lấy đúng mã do server sinh.
+  // options.selfService: đơn từ trang đăng ký công khai — đi qua /api/public/orders nên
+  // khách cũ dùng lại email vẫn đặt thêm được mà không cần đăng nhập.
+  const placeOrder = async (
+    orderData: PlaceOrderInput,
+    options: { selfService?: boolean } = {}
+  ): Promise<Order> => {
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1557,27 +1561,11 @@ function createNexusStore() {
       orderData.retailEmployeeName
     );
 
-    const newOrder: Order = {
-      ...orderData,
-      ...routing,
-      bulkConnectionsCount,
-      bulkDiscountPercent: getBulkDiscountPercent(bulkConnectionsCount),
-      id: newId,
-      // Default to PendingRetail so retail branch staff can verify and approve the paperwork
-      status: 'PendingRetail',
-      createdAt: `${dateStr} ${timeStr}`,
-      cableDistanceMeters: Math.floor(60 + Math.random() * 400),
-      dpBoxCapacity: 'Port available / DP-Scan',
-      signalLossDbm: Number(-(14 + Math.random() * 8).toFixed(1)),
-    };
-
-    orders.update((prev) => [newOrder, ...prev]);
-
-    createOrderApi({
-      orderId: newId,
+    const created = await createOrderApi({
       customerName: orderData.customerName,
       customerPhone: orderData.customerPhone,
-      customerEmail: orderData.customerEmail,
+      // Không có email thì gửi hẳn undefined, để backend không so khớp một chuỗi rỗng.
+      customerEmail: orderData.customerEmail?.trim() || undefined,
       installationAddress: orderData.installationAddress,
       idProofType: orderData.idProofType,
       idProofNumber: orderData.idProofNumber,
@@ -1590,12 +1578,24 @@ function createNexusStore() {
       assignedBranchName: routing.assignedBranchName,
       status: 'PendingRetail',
       bulkConnectionsCount,
-      bulkDiscountPercent: newOrder.bulkDiscountPercent,
+      bulkDiscountPercent: getBulkDiscountPercent(bulkConnectionsCount),
       // Dial-Up: khách khai đang giữ landline Nexus → khảo sát chỉ cần lớp
       // internet (miễn landline) — spec mục feasibility.
       existingLandlineAccountId: orderData.existingLandlineAccountId || undefined,
-    }).catch((err) => console.warn('[Nexus] Backend order creation fallback:', err));
+    }, options);
 
+    const newOrder: Order = {
+      ...orderData,
+      ...routing,
+      bulkConnectionsCount,
+      bulkDiscountPercent: getBulkDiscountPercent(bulkConnectionsCount),
+      depositWaived: created.depositWaived ?? isDepositWaived(bulkConnectionsCount),
+      id: created.orderId,
+      status: (created.status as Order['status']) ?? 'PendingRetail',
+      createdAt: `${dateStr} ${timeStr}`,
+    };
+
+    orders.update((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrder.id)]);
     return newOrder;
   };
 
@@ -1816,6 +1816,12 @@ function createNexusStore() {
     const dateStr = now.toISOString().slice(0, 10);
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const assignedStamp = `${dateStr} ${timeStr}`;
+
+    // Hồ sơ phải được chi nhánh duyệt xong mới được phân công kỹ thuật viên.
+    const gate = get(orders).find((o) => o.id === orderId);
+    if (!gate || !isReleasedToTechnical(gate.status)) {
+      return null;
+    }
 
     orders.update((prev) =>
       prev.map((ord) => {
@@ -2234,7 +2240,7 @@ function createNexusStore() {
     const r = updated || {};
     let saved: Bill | null = null;
     bills.update((prev) =>
-      prev.map((bill) => {
+      prev.map((bill): Bill => {
         if (bill.invoiceNumber !== invoiceNumber) return bill;
         saved = {
           ...bill,
@@ -2252,7 +2258,6 @@ function createNexusStore() {
           amountPaid: r.amountPaid ?? bill.amountPaid,
           dueAmount: r.dueAmount ?? bill.dueAmount,
           status: r.status ?? bill.status,
-          lateFeeAmount: r.lateFeeAmount ?? (bill as any).lateFeeAmount ?? 0,
           customerName: r.customerName ?? bill.customerName,
           planName: r.planName ?? bill.planName,
           paymentHistory: (r.payments || []).length
@@ -2363,6 +2368,78 @@ function createNexusStore() {
   const deletePurchaseOrder = async (id: string) => {
     await deletePurchaseOrderApi(id);
     purchaseOrders.update((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  // ---- Equipment Request Handlers (Yêu cầu nhập hàng từ KTV gửi Admin) ----
+  const mapEquipmentRequest = (r: any): EquipmentRequest => ({
+    id: r.requestId || r.id,
+    orderId: r.orderId || undefined,
+    storeId: r.storeId,
+    storeName: r.storeName || r.store?.name || undefined,
+    employeeId: r.employeeId,
+    employeeName: r.employeeName || r.employee?.fullName || undefined,
+    inventoryId: r.inventoryId || undefined,
+    itemName: r.itemName,
+    deviceType: r.deviceType,
+    quantity: r.quantity || 1,
+    urgency: r.urgency || 'Normal',
+    status: r.status || 'Pending',
+    reason: r.reason || undefined,
+    adminNotes: r.adminNotes || undefined,
+    createdAt: r.createdAt ? String(r.createdAt).slice(0, 19).replace('T', ' ') : '',
+    updatedAt: r.updatedAt ? String(r.updatedAt).slice(0, 19).replace('T', ' ') : undefined,
+  });
+
+  const refreshEquipmentRequests = async (filters?: { storeId?: string; status?: string }) => {
+    try {
+      const list = await fetchEquipmentRequestsApi(filters);
+      equipmentRequests.set((list || []).map(mapEquipmentRequest));
+    } catch (err) {
+      console.warn('[Nexus] Cannot load equipment requests:', err);
+    }
+  };
+
+  const addEquipmentRequest = async (
+    data: {
+      orderId?: string | null;
+      storeId: string;
+      inventoryId?: string | null;
+      itemName: string;
+      deviceType: string;
+      quantity: number;
+      urgency?: string;
+      reason?: string | null;
+    }
+  ): Promise<EquipmentRequest> => {
+    try {
+      const created = await createEquipmentRequestApi(data);
+      const mapped = mapEquipmentRequest(created);
+      equipmentRequests.update((prev) => [mapped, ...prev]);
+      return mapped;
+    } catch (err) {
+      console.warn('[Nexus] API create equipment request failed:', err);
+      throw err;
+    }
+  };
+
+  const setEquipmentRequestStatus = async (
+    id: string,
+    status: EquipmentRequest['status'],
+    adminNotes?: string
+  ): Promise<EquipmentRequest> => {
+    const updated = await updateEquipmentRequestStatusApi(id, status, adminNotes);
+    const mapped = mapEquipmentRequest(updated);
+    equipmentRequests.update((prev) => prev.map((r) => (r.id === id ? mapped : r)));
+    if (status === 'Fulfilled') {
+      void refreshInventory();
+      void syncWithDatabase();
+    }
+    return mapped;
+  };
+
+  const deleteEquipmentRequest = async (id: string) => {
+    await deleteEquipmentRequestApi(id);
+    equipmentRequests.update((prev) => prev.filter((r) => r.id !== id));
   };
 
   // ---- Feedback Handlers (functional requirement #2) ----
@@ -2587,7 +2664,7 @@ function createNexusStore() {
             department: e.department || '',
             retailShopAssigned: e.storeId || undefined,
             status: e.status || 'Active',
-            dateOfJoining: e.dateOfJoining ? String(e.dateOfJoining).slice(0, 10) : undefined,
+            dateOfJoining: e.dateOfJoining ? String(e.dateOfJoining).slice(0, 10) : '',
             avatar: e.avatarUrl || undefined,
             address: e.address || undefined,
             gender: (e.gender || '').toLowerCase() || undefined,
@@ -2647,6 +2724,8 @@ function createNexusStore() {
               scheduledInstallDate: ao.scheduledInstallDate ? ao.scheduledInstallDate.slice(0, 16).replace('T', ' ') : local?.scheduledInstallDate,
               bulkConnectionsCount: ao.bulkConnectionsCount ?? local?.bulkConnectionsCount ?? 1,
               bulkDiscountPercent: ao.bulkDiscountPercent ?? local?.bulkDiscountPercent ?? 0,
+              // Orders.DepositWaived (cột tính toán): > 50 kết nối thì miễn tiền cọc.
+              depositWaived: ao.depositWaived ?? isDepositWaived(ao.bulkConnectionsCount ?? local?.bulkConnectionsCount ?? 1),
               existingLandlineAccountId: ao.existingLandlineAccountId || local?.existingLandlineAccountId,
               landlineFeasible: ao.landlineFeasible ?? local?.landlineFeasible,
               internetFeasible: ao.internetFeasible ?? local?.internetFeasible,
@@ -2744,6 +2823,7 @@ function createNexusStore() {
     setTimeout(() => {
       syncWithDatabase();
       refreshPurchaseOrders();
+      refreshEquipmentRequests();
     }, 150);
   }
 
@@ -2792,6 +2872,11 @@ function createNexusStore() {
     addPurchaseOrder,
     setPurchaseOrderStatus,
     deletePurchaseOrder,
+    equipmentRequests,
+    refreshEquipmentRequests,
+    addEquipmentRequest,
+    setEquipmentRequestStatus,
+    deleteEquipmentRequest,
     updateInventoryStock,
     addInventoryItem,
     updateInventoryItem,

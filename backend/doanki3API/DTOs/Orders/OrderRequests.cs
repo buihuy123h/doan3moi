@@ -46,8 +46,9 @@ namespace doanki3API.DTOs.Orders
         [StringLength(150)]
         public string? AssignedBranchName { get; set; }
 
+        // Bị bỏ qua: server luôn tạo đơn ở trạng thái PendingRetail (chờ chi nhánh duyệt).
         [StringLength(50)]
-        public string Status { get; set; } = "Pending";
+        public string Status { get; set; } = "PendingRetail";
 
         public int BulkConnectionsCount { get; set; } = 1;
 

@@ -137,6 +137,65 @@ public class CustomerOtpController : ControllerBase
                 connection.AccountId)));
     }
 
+    // Chống bấm liên tục làm ngập hộp thư: mỗi email chỉ được yêu cầu lại mã sau 60 giây.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime>
+        ForgotRequests = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Khách quên / chưa nhận được mã tài khoản: nhập email, hệ thống gửi lại mọi mã tài khoản
+    /// gắn với email đó. Luôn trả cùng một câu trả lời dù email có tồn tại hay không, để người
+    /// ngoài không dò được email nào là khách hàng.
+    /// </summary>
+    [HttpPost("forgot-account-id")]
+    public async Task<IActionResult> ForgotAccountId(
+        [FromBody] ForgotAccountIdRequest request,
+        CancellationToken ct)
+    {
+        var email = request.Email.Trim();
+        const string genericMessage =
+            "Nếu email này đã đăng ký dịch vụ, mã tài khoản sẽ được gửi tới hộp thư trong ít phút.";
+
+        var now = DateTime.UtcNow;
+        if (ForgotRequests.TryGetValue(email, out var last) && now - last < TimeSpan.FromSeconds(60))
+        {
+            var wait = 60 - (int)(now - last).TotalSeconds;
+            return StatusCode(StatusCodes.Status429TooManyRequests, new
+            {
+                message = $"Bạn vừa yêu cầu. Vui lòng đợi {wait} giây rồi thử lại.",
+                resendAfterSeconds = wait
+            });
+        }
+        ForgotRequests[email] = now;
+
+        var customer = await _context.Customers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Email == email, ct);
+
+        if (customer is not null)
+        {
+            var accountIds = await _context.CustomerConnections
+                .AsNoTracking()
+                .Where(c => c.Order.CustomerId == customer.CustomerId)
+                .Select(c => c.AccountId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            if (accountIds.Count > 0)
+            {
+                var name = string.IsNullOrWhiteSpace(customer.FullName) ? "Quý khách" : customer.FullName;
+                _ = Task.Run(() => _email.SendAccountIdReminderAsync(email, name, accountIds, CancellationToken.None));
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Khách {CustomerId} yêu cầu gửi lại mã nhưng chưa có đường truyền nào được đấu nối.",
+                    customer.CustomerId);
+            }
+        }
+
+        return Ok(new { message = genericMessage });
+    }
+
     /// <summary>
     /// Tìm kết nối theo mã tài khoản, chấp nhận mọi cách gõ: có gạch nối, không gạch nối,
     /// viết hoa hay viết thường đều ra cùng một tài khoản.

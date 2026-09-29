@@ -93,19 +93,10 @@ public sealed class TechnicalOrdersController : TechnicalApiControllerBase
             return BadRequest(ModelState);
         }
 
-        if (!string.IsNullOrWhiteSpace(request.IdProofType) &&
-            request.IdProofType.Equals("National ID Card", StringComparison.OrdinalIgnoreCase) &&
-            !Regex.IsMatch(request.IdProofNumber ?? string.Empty, @"^\d{13}$"))
+        var validationError = TechnicalOrderService.ValidateCreateRequest(request);
+        if (validationError is not null)
         {
-            return BadRequest(new { message = "IdProofNumber must contain exactly 13 digits for National ID Card." });
-        }
-
-        if (string.Equals(request.ConnectionType, "Dial-Up", StringComparison.OrdinalIgnoreCase))
-        {
-            if (string.IsNullOrWhiteSpace(request.ExistingLandlineAccountId) || !request.ExistingLandlineAccountId.StartsWith("T", StringComparison.OrdinalIgnoreCase))
-            {
-                return BadRequest(new { message = "Khách hàng bắt buộc phải có tài khoản Landline (Cố định, mã T...) để đăng ký mạng Dial-Up. Landline is compulsory." });
-            }
+            return BadRequest(new { message = validationError });
         }
 
         var order = await _orderService.CreateOrderAsync(request, cancellationToken);

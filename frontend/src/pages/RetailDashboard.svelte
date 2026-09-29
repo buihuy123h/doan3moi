@@ -55,8 +55,16 @@
     Bill,
     PaymentRecord,
   } from "../types/nexus";
-  import { getBulkDiscountPercent } from "../context/NexusContext";
-  import { orderStatusLabel, orderStatusTone } from "../types/nexus";
+  import {
+    getBulkDiscountPercent,
+    isDepositWaived,
+    DEPOSIT_WAIVER_MIN_CONNECTIONS,
+  } from "../context/NexusContext";
+  import {
+    orderStatusLabel,
+    orderStatusTone,
+    isReleasedToTechnical,
+  } from "../types/nexus";
   import { toast } from "svelte-sonner";
   import {
     isValidEmail,
@@ -71,6 +79,7 @@
     getPlanDescription,
     getPlanSpeedOrBandwidth,
   } from "../lib/planI18n";
+  import Pagination from "../components/common/Pagination.svelte";
 
   type RetailTab =
     | "new-order"
@@ -236,6 +245,16 @@
   let showAdvancedSearch = $state(false);
   let advSearching = $state(false);
   let advResults = $state<Order[] | null>(null);
+  let advCurrentPage = $state(1);
+  const advItemsPerPage = 10;
+  const paginatedAdvResults = $derived(
+    advResults
+      ? advResults.slice(
+          (advCurrentPage - 1) * advItemsPerPage,
+          advCurrentPage * advItemsPerPage
+        )
+      : []
+  );
   const advForm = $state({
     orderId: "",
     customerName: "",
@@ -453,6 +472,18 @@
   // Every application that belongs to this desk: matched by the routed employee id,
   // by branch code, or (for self-service sign-ups) by the branch the customer picked.
   // When an employee searches for a customer name or order ID, allow matching across all branches.
+  // Chi nhánh đang có nhân viên bán lẻ trực quầy. Khách tự đăng ký được chọn MỌI chi nhánh
+  // (VD SH-03) kể cả nơi chưa có nhân viên bán lẻ nào — đơn đó trước đây bị ẩn khỏi mọi
+  // quầy nên không ai duyệt được, Kỹ thuật cũng không bao giờ nhận, dù thông báo đã tới.
+  const staffedBranchCodes = $derived(
+    new Set(
+      $employees
+        .filter((e) => e.role === "Retail Staff" && e.status !== "Inactive")
+        .map((e) => shopCodeFrom(e.retailShopAssigned))
+        .filter((code): code is string => !!code),
+    ),
+  );
+
   const branchScopedOrders = $derived(
     $orders.filter((o) => {
       if (canSeeAllBranches || viewAllBranchesScope || !activeBranchCode)
@@ -465,7 +496,10 @@
         ? o.assignedEmployeeId.toLowerCase() ===
           ($currentUser?.id ?? "").toLowerCase()
         : false;
-      return routed || o.retailOutletCode?.toUpperCase() === activeBranchCode;
+      const outlet = o.retailOutletCode?.toUpperCase();
+      // Đơn của chi nhánh chưa có nhân viên bán lẻ: quầy nào cũng thấy để xử lý thay.
+      const orphanBranch = !!outlet && !staffedBranchCodes.has(outlet);
+      return routed || outlet === activeBranchCode || orphanBranch;
     }),
   );
 
@@ -500,6 +534,22 @@
     }),
   );
 
+  // Approval Queue Pagination
+  let approvalCurrentPage = $state(1);
+  const approvalItemsPerPage = 10;
+  const paginatedApprovalOrders = $derived(
+    approvalQueueOrders.slice(
+      (approvalCurrentPage - 1) * approvalItemsPerPage,
+      approvalCurrentPage * approvalItemsPerPage
+    )
+  );
+  $effect(() => {
+    approvalSearch;
+    approvalFilter;
+    viewAllBranchesScope;
+    approvalCurrentPage = 1;
+  });
+
   const handleApproveOrder = async (order: Order) => {
     const who = $currentUser?.name || order.retailEmployeeName || "Retail Desk";
     const updated = await approveOrderByRetail(order.id, who);
@@ -513,8 +563,8 @@
     }
     toast.success(
       $language === "vi"
-        ? `Đã duyệt hồ sơ ${order.id} — chuyển sang hàng đợi khảo sát kỹ thuật.`
-        : `Approved ${order.id} — released to the technical feasibility queue.`,
+        ? `Đã duyệt hồ sơ ${order.id} — đơn đã sang Theo dõi đơn hàng để phân công kỹ thuật viên.`
+        : `Approved ${order.id} — now in Order Tracking for technician assignment.`,
     );
   };
 
@@ -574,11 +624,17 @@
   const statusChip = (s: Order["status"]) => orderStatusTone(s).chip;
   const statusDot = (s: Order["status"]) => orderStatusTone(s).dot;
 
+  // Chỉ đơn đã được chi nhánh duyệt hồ sơ mới sang Theo dõi đơn hàng để phân công KTV.
+  // Đơn 'PendingRetail' / 'Not Approved' vẫn nằm ở trang Duyệt hồ sơ chi nhánh.
+  const releasedOrders = $derived(
+    $orders.filter((o) => isReleasedToTechnical(o.status)),
+  );
+
   // Source orders for Order Tracking: respects branch scope filter or shows all branches by default
   const trackingSourceOrders = $derived(
     orderBranchFilter === "All"
-      ? $orders
-      : $orders.filter(
+      ? releasedOrders
+      : releasedOrders.filter(
           (o) =>
             o.retailOutletCode?.toUpperCase() ===
               orderBranchFilter.toUpperCase() ||
@@ -590,7 +646,7 @@
 
   // Latest orders for quick-pick tags: ALWAYS computed from all orders, sorted newest first!
   const latestOrderTags = $derived(
-    [...$orders]
+    [...releasedOrders]
       .sort((a, b) => {
         const timeA = a.createdAt || "";
         const timeB = b.createdAt || "";
@@ -729,6 +785,24 @@
       }),
   );
 
+  // Order Tracking Pagination
+  let trackingCurrentPage = $state(1);
+  const trackingItemsPerPage = 10;
+  const paginatedTrackedOrders = $derived(
+    filteredTrackedOrders.slice(
+      (trackingCurrentPage - 1) * trackingItemsPerPage,
+      trackingCurrentPage * trackingItemsPerPage
+    )
+  );
+  $effect(() => {
+    orderSearchQuery;
+    orderStatusFilter;
+    orderTypeFilter;
+    orderBranchFilter;
+    orderSortOrder;
+    trackingCurrentPage = 1;
+  });
+
   const toggleOrderDropdown = (orderId: string) => {
     if (expandedOrderId === orderId) {
       expandedOrderId = null;
@@ -776,6 +850,14 @@
   };
 
   const openAssignTechnicianModal = (order: Order) => {
+    if (!isReleasedToTechnical(order.status)) {
+      toast.error(
+        $language === "vi"
+          ? "Hồ sơ chưa được chi nhánh duyệt — hãy duyệt ở trang Duyệt hồ sơ chi nhánh trước."
+          : "This application has not been approved by the branch yet.",
+      );
+      return;
+    }
     targetOrderForTechAssign = order;
     if (order.assignedTechnicianId) {
       selectedTechnicianId = order.assignedTechnicianId;
@@ -848,11 +930,18 @@
       );
       return;
     }
-    const found = $orders.find(
-      (o) =>
-        o.id.toLowerCase().includes(q) ||
-        o.customerName.toLowerCase().includes(q),
-    );
+    const matches = (o: Order) =>
+      o.id.toLowerCase().includes(q) ||
+      o.customerName.toLowerCase().includes(q);
+    const found = releasedOrders.find(matches);
+    if (!found && $orders.some(matches)) {
+      toast.info(
+        $language === "vi"
+          ? "Đơn này đang chờ duyệt ở trang Duyệt hồ sơ chi nhánh."
+          : "This order is still in the branch approval queue.",
+      );
+      return;
+    }
     if (found) {
       expandedOrderId = found.id;
       toast.success(
@@ -899,6 +988,22 @@
     }),
   );
 
+  // Connection Details Pagination
+  let connDetailsCurrentPage = $state(1);
+  const connDetailsItemsPerPage = 10;
+  const paginatedTrackedConnections = $derived(
+    filteredTrackedConnections.slice(
+      (connDetailsCurrentPage - 1) * connDetailsItemsPerPage,
+      connDetailsCurrentPage * connDetailsItemsPerPage
+    )
+  );
+  $effect(() => {
+    connSearchQuery;
+    connStatusFilter;
+    connTypeFilter;
+    connDetailsCurrentPage = 1;
+  });
+
   const toggleConnDropdown = (accountId: string) => {
     if (expandedConnAccountId === accountId) {
       expandedConnAccountId = null;
@@ -940,8 +1045,27 @@
     }
   };
 
-  // STATE: PAYMENT RECORDS SEARCH
+  // STATE: PAYMENT RECORDS SEARCH & PAGINATION
   let paymentAccountQuery = $state("");
+  let paymentCurrentPage = $state(1);
+  const paymentItemsPerPage = 10;
+  const filteredPaymentBills = $derived(
+    $bills.filter(
+      (b) =>
+        b.accountId.toLowerCase().includes(paymentAccountQuery.toLowerCase()) ||
+        b.customerName.toLowerCase().includes(paymentAccountQuery.toLowerCase())
+    )
+  );
+  const paginatedPaymentBills = $derived(
+    filteredPaymentBills.slice(
+      (paymentCurrentPage - 1) * paymentItemsPerPage,
+      paymentCurrentPage * paymentItemsPerPage
+    )
+  );
+  $effect(() => {
+    paymentAccountQuery;
+    paymentCurrentPage = 1;
+  });
 
   // Payment Modal State for Retail Counter (Cập nhật lịch sử thanh toán vào hệ thống)
   let isPaymentModalOpen = $state(false);
@@ -1367,7 +1491,8 @@
       id: "order-tracking",
       label: $t.retailNav.orderTracking,
       icon: Clock,
-      badge: branchScopedOrders.length,
+      badge: branchScopedOrders.filter((o) => isReleasedToTechnical(o.status))
+        .length,
     },
     {
       id: "connection-details",
@@ -2089,7 +2214,7 @@
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-                    {#each advResults as o (o.id)}
+                    {#each paginatedAdvResults as o (o.id)}
                       <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
                         <td class="px-4 py-2 font-mono font-bold text-indigo-600 dark:text-indigo-400">{o.id}</td>
                         <td class="px-4 py-2 font-semibold text-slate-900 dark:text-white">{o.customerName}</td>
@@ -2108,6 +2233,7 @@
                 </table>
               </div>
             </div>
+            <Pagination bind:currentPage={advCurrentPage} totalItems={advResults ? advResults.length : 0} pageSize={advItemsPerPage} />
           {/if}
         </div>
       {/if}
@@ -2242,7 +2368,7 @@
                   </td>
                 </tr>
               {:else}
-                {#each approvalQueueOrders as o (o.id)}
+                {#each paginatedApprovalOrders as o (o.id)}
                   <tr
                     class="hover:bg-amber-50/40 dark:hover:bg-amber-950/10 transition-colors"
                   >
@@ -2379,6 +2505,7 @@
           </table>
         </div>
       </div>
+      <Pagination bind:currentPage={approvalCurrentPage} totalItems={approvalQueueOrders.length} pageSize={approvalItemsPerPage} />
     </div>
   {/if}
 
@@ -2533,9 +2660,14 @@
           </div>
         </div>
 
-        <!-- Awaiting retail approval (STAGE 1) -->
-        <div
-          class="p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900/40 shadow-sm"
+        <!-- Awaiting retail approval (STAGE 1) — những đơn này nằm ở trang Duyệt hồ sơ -->
+        <button
+          type="button"
+          onclick={() => (activeTab = "approval-queue")}
+          title={$language === "vi"
+            ? "Mở trang Duyệt hồ sơ chi nhánh"
+            : "Open the branch approval queue"}
+          class="text-left p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900/40 shadow-sm hover:bg-amber-50 dark:hover:bg-amber-950/30 transition cursor-pointer"
         >
           <div
             class="text-[11px] font-mono text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center justify-between"
@@ -2550,18 +2682,17 @@
           <div
             class="text-2xl font-bold font-mono text-amber-700 dark:text-amber-400 mt-1.5"
           >
-            {trackingSourceOrders.filter((o) => o.status === "PendingRetail")
-              .length}
+            {awaitingApprovalCount}
             <span class="text-xs font-normal text-amber-600/70 ml-1"
               >{$language === "vi" ? "hồ sơ" : "apps"}</span
             >
           </div>
           <div class="text-[10px] text-amber-600/80 dark:text-amber-500 mt-1">
             {$language === "vi"
-              ? "Bàn chi nhánh kiểm tra hồ sơ"
-              : "Branch desk paperwork check"}
+              ? "Duyệt xong mới phân công KTV →"
+              : "Approve first, then assign →"}
           </div>
-        </div>
+        </button>
 
         <!-- Cleared by retail, awaiting Technical (STAGE 2) -->
         <div
@@ -2742,36 +2873,6 @@
               >
                 {$language === "vi" ? "Chờ kỹ thuật" : "Pending Survey"} ({trackingSourceOrders.filter(
                   (o) => o.status === "Pending",
-                ).length})
-              </button>
-              <button
-                onclick={() => {
-                  orderStatusFilter = "PendingRetail";
-                  orderSortOrder = "newest";
-                  orderSearchQuery = "";
-                }}
-                class="px-2.5 py-1 text-xs font-medium rounded-lg transition cursor-pointer {orderStatusFilter ===
-                'PendingRetail'
-                  ? 'bg-amber-600 text-white shadow-sm'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}"
-              >
-                {$language === "vi" ? "Chờ bán hàng duyệt" : "Awaiting Retail"} ({trackingSourceOrders.filter(
-                  (o) => o.status === "PendingRetail",
-                ).length})
-              </button>
-              <button
-                onclick={() => {
-                  orderStatusFilter = "Not Approved";
-                  orderSortOrder = "newest";
-                  orderSearchQuery = "";
-                }}
-                class="px-2.5 py-1 text-xs font-medium rounded-lg transition cursor-pointer {orderStatusFilter ===
-                'Not Approved'
-                  ? 'bg-orange-600 text-white shadow-sm'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}"
-              >
-                {$language === "vi" ? "Hồ sơ bị trả lại" : "Returned"} ({trackingSourceOrders.filter(
-                  (o) => o.status === "Not Approved",
                 ).length})
               </button>
               <button
@@ -3009,7 +3110,7 @@
               <tbody
                 class="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans"
               >
-                {#each filteredTrackedOrders as o (o.id)}
+                {#each paginatedTrackedOrders as o (o.id)}
                   {@const isExpanded = expandedOrderId === o.id}
                   <!-- Main Table Row -->
                   <tr
@@ -3165,16 +3266,6 @@
                           {/if}
                         </div>
 
-                        {#if o.status === "PendingRetail"}
-                          <button
-                            onclick={() => (activeTab = "approval-queue")}
-                            class="block text-[10px] font-semibold text-amber-700 dark:text-amber-400 hover:underline mt-0.5"
-                          >
-                            {$language === "vi"
-                              ? "Mở hàng đợi duyệt →"
-                              : "Open approval queue →"}
-                          </button>
-                        {/if}
                       </div>
                     </td>
 
@@ -3770,6 +3861,7 @@
           </div>
         {/if}
       </div>
+      <Pagination bind:currentPage={trackingCurrentPage} totalItems={filteredTrackedOrders.length} pageSize={trackingItemsPerPage} />
     </div>
   {/if}
 
@@ -4101,7 +4193,7 @@
               <tbody
                 class="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans"
               >
-                {#each filteredTrackedConnections as conn (conn.accountId)}
+                {#each paginatedTrackedConnections as conn (conn.accountId)}
                   {@const isExpanded = expandedConnAccountId === conn.accountId}
                   {@const due = getConnectionDueAmount(conn.accountId)}
                   <!-- Main Table Row -->
@@ -4691,6 +4783,7 @@
           </div>
         {/if}
       </div>
+      <Pagination bind:currentPage={connDetailsCurrentPage} totalItems={filteredTrackedConnections.length} pageSize={connDetailsItemsPerPage} />
     </div>
   {/if}
 
@@ -4763,11 +4856,7 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-              {#each $bills.filter((b) => b.accountId
-                    .toLowerCase()
-                    .includes(paymentAccountQuery.toLowerCase()) || b.customerName
-                    .toLowerCase()
-                    .includes(paymentAccountQuery.toLowerCase())) as bill (bill.id)}
+              {#each paginatedPaymentBills as bill (bill.id)}
                 <tr
                   class="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer"
                   onclick={() => handleOpenRetailPayment(bill)}
@@ -4823,12 +4912,14 @@
           </table>
         </div>
       </div>
+      <Pagination bind:currentPage={paymentCurrentPage} totalItems={filteredPaymentBills.length} pageSize={paymentItemsPerPage} />
     </div>
   {/if}
 
   <!-- CONFIRM ORDER & ISSUE CODE MODAL (Màn hình xác nhận tạo đơn và cấp mã) -->
   {#if isConfirmOrderModalOpen && currentPlan}
-    {@const base = currentPlan.monthlyRental + currentPlan.securityDeposit}
+    {@const depositWaived = isDepositWaived(bulkConnectionsCount)}
+    {@const base = currentPlan.monthlyRental + (depositWaived ? 0 : currentPlan.securityDeposit)}
     {@const disc = (base * bulkDiscountPercent) / 100}
     {@const taxed = (base - disc) * 1.1224}
     <div
@@ -5049,10 +5140,32 @@
                     ? "Tiền đặt cọc thiết bị:"
                     : "Security Deposit:"}</span
                 >
-                <span class="font-mono font-medium"
-                  >${currentPlan.securityDeposit.toFixed(2)}</span
-                >
+                {#if depositWaived}
+                  <!-- Trên 50 kết nối: miễn tiền cọc (Orders.DepositWaived) -->
+                  <span class="flex items-center gap-1.5">
+                    <span class="font-mono line-through text-slate-400"
+                      >${currentPlan.securityDeposit.toFixed(2)}</span
+                    >
+                    <span
+                      class="px-1.5 py-0.5 rounded text-[10px] font-extrabold uppercase bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700"
+                      >{$language === "vi" ? "Miễn phí" : "Free"}</span
+                    >
+                  </span>
+                {:else}
+                  <span class="font-mono font-medium"
+                    >${currentPlan.securityDeposit.toFixed(2)}</span
+                  >
+                {/if}
               </div>
+              {#if depositWaived}
+                <div
+                  class="px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300"
+                >
+                  {$language === "vi"
+                    ? `Đơn ${bulkConnectionsCount} kết nối (trên ${DEPOSIT_WAIVER_MIN_CONNECTIONS}) được MIỄN PHÍ tiền cọc.`
+                    : `${bulkConnectionsCount} connections (over ${DEPOSIT_WAIVER_MIN_CONNECTIONS}) — security deposit is FREE.`}
+                </div>
+              {/if}
               {#if bulkDiscountPercent > 0}
                 <div
                   class="flex justify-between text-emerald-600 dark:text-emerald-400"
