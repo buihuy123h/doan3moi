@@ -314,6 +314,7 @@ export async function createInventoryItemApi(data: {
 
 export async function createEquipmentApi(data: {
   equipmentId?: string;
+  inventoryId?: string;
   serialNumber?: string;
   macAddress?: string;
   deviceModel: string;
@@ -328,6 +329,7 @@ export async function createEquipmentApi(data: {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       equipmentId: data.equipmentId || `EQ-${Date.now().toString().slice(-8)}`,
+      inventoryId: data.inventoryId,
       serialNumber: data.serialNumber,
       macAddress: data.macAddress,
       deviceModel: data.deviceModel,

@@ -901,22 +901,31 @@
     // Chốt đơn đang xử lý trước khi gọi API, vì sau await biến state có thể đã đổi.
     const target = targetOrderForTechAssign;
 
-    const res = await assignTechnicianToOrder(
-      target.id,
-      tech.name,
-      tech.id,
-      tech.phone,
-      assignSurveyNotes.trim() || undefined,
-    );
-
-    if (res) {
-      toast.success(
-        $language === "vi"
-          ? `Đã phân công kỹ thuật viên ${tech.name} (${tech.employeeCode}) đảm nhiệm khảo sát đơn ${target.id}!`
-          : `Assigned technician ${tech.name} (${tech.employeeCode}) for order ${target.id}!`,
+    try {
+      const res = await assignTechnicianToOrder(
+        target.id,
+        tech.name,
+        tech.id,
+        tech.phone,
+        assignSurveyNotes.trim() || undefined,
       );
-      isAssignTechModalOpen = false;
-      targetOrderForTechAssign = null;
+
+      if (res) {
+        toast.success(
+          $language === "vi"
+            ? `Đã phân công kỹ thuật viên ${tech.name} (${tech.employeeCode}) đảm nhiệm khảo sát đơn ${target.id}!`
+            : `Assigned technician ${tech.name} (${tech.employeeCode}) for order ${target.id}!`,
+        );
+        isAssignTechModalOpen = false;
+        targetOrderForTechAssign = null;
+      }
+    } catch (error) {
+      console.error("[Retail] Technician assignment failed:", error);
+      toast.error(
+        $language === "vi"
+          ? "Không thể lưu phân công kỹ thuật viên. Vui lòng thử lại."
+          : "Technician assignment could not be saved. Please try again.",
+      );
     }
   };
 
@@ -1523,11 +1532,8 @@
   navItems={retailNavItems}
   roleBadgeTitle={$t.roles.retail}
   pageTitle={retailNavItems.find((n) => n.id === activeTab)?.label}
-  primaryAction={{
-    label: $t.actions.newOrder,
-    onClick: () => (activeTab = "new-order"),
-    icon: Plus,
-  }}
+  hideExportAction={true}
+  hideDefaultPrimaryAction={true}
 >
   <!-- TAB 1: PLACE ORDER FORM -->
   {#if activeTab === "new-order"}

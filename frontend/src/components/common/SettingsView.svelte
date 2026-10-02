@@ -32,6 +32,8 @@
     Clock,
     ChevronDown,
     ChevronUp,
+    Lock,
+    ShieldAlert,
   } from "lucide-svelte";
   import { toast } from "svelte-sonner";
 
@@ -41,6 +43,8 @@
   const { currentUser } = authStore;
 
   let { showBranchSwitcher = true } = $props<{ showBranchSwitcher?: boolean }>();
+
+  const isAdmin = $derived($currentUser?.role === "admin");
 
   // Language select animation state & change handler
   let isLangJustChanged = $state(false);
@@ -102,6 +106,15 @@
 
   // Handle Branch Change
   const handleSelectBranch = (code: string) => {
+    if (!isAdmin) {
+      toast.error(
+        $language === "vi"
+          ? "Chỉ Quản trị viên (Admin) mới có quyền chuyển đổi cơ sở."
+          : "Only Administrators are allowed to switch branches.",
+      );
+      return;
+    }
+
     selectedBranchCode = code;
     localStorage.setItem("nexus_active_branch", code);
     const shop = $retailShops.find((s) => s.shopCode === code);
@@ -459,7 +472,7 @@
     {/if}
   </div>
 
-  <!-- 3. BRANCH SWITCHER (CHUYỂN ĐỔI CHI NHÁNH) - Only for staff roles, not for customers/users -->
+  <!-- 3. BRANCH SWITCHER (CHUYỂN ĐỔI CHI NHÁNH) - Only Admin can switch, other roles have read-only view -->
   {#if showBranchSwitcher && $currentUser?.role !== "user"}
   <div
     class="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm transition-colors duration-300 overflow-hidden {isBranchOpen
@@ -484,42 +497,72 @@
         }}
       >
         <div
-          class="h-10 w-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs shrink-0"
+          class="h-10 w-10 rounded-xl {isAdmin ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'} flex items-center justify-center shadow-xs shrink-0"
         >
           <Building2 class="h-5 w-5" />
         </div>
         <div>
-          <h3 class="text-base font-bold text-slate-900 dark:text-white">
-            {$language === "vi"
-              ? "Chuyển đổi chi nhánh làm việc"
-              : "Active Branch Location & Retail Outlet"}
-          </h3>
+          <div class="flex items-center space-x-2">
+            <h3 class="text-base font-bold text-slate-900 dark:text-white">
+              {#if isAdmin}
+                {$language === "vi"
+                  ? "Chuyển đổi chi nhánh làm việc"
+                  : "Active Branch Location & Retail Outlet"}
+              {:else}
+                {$language === "vi"
+                  ? "Chi nhánh làm việc (Cố định theo tài khoản)"
+                  : "Current Working Branch (Fixed to Account)"}
+              {/if}
+            </h3>
+            {#if !isAdmin}
+              <span class="inline-flex items-center text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800">
+                <Lock class="h-2.5 w-2.5 mr-1" />
+                {$language === "vi" ? "Chỉ Admin được đổi" : "Admin Only"}
+              </span>
+            {/if}
+          </div>
           <p class="text-xs text-slate-500 dark:text-slate-400">
-            {$language === "vi"
-              ? "Lựa chọn chi nhánh phụ trách để xử lý đơn hàng, kho thiết bị và thanh toán theo khu vực."
-              : "Select your operational retail branch to filter local orders, technical stock, and regional subscribers."}
+            {#if isAdmin}
+              {$language === "vi"
+                ? "Lựa chọn chi nhánh phụ trách để xử lý đơn hàng, kho thiết bị và thanh toán theo khu vực."
+                : "Select your operational retail branch to filter local orders, technical stock, and regional subscribers."}
+            {:else}
+              {$language === "vi"
+                ? "Chi nhánh làm việc được chỉ định cố định. Chỉ Quản trị viên (Admin) mới có quyền chuyển đổi cơ sở."
+                : "Operational branch is fixed for your account. Only System Administrators can change branches."}
+            {/if}
           </p>
         </div>
       </div>
 
       <!-- Quick Dropdown select & Toggle -->
       <div class="flex items-center space-x-2 shrink-0">
-        <span
-          class="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap hidden sm:inline"
-        >
-          {$language === "vi" ? "Chọn nhanh:" : "Quick Select:"}
-        </span>
-        <select
-          value={selectedBranchCode}
-          onchange={(e) => handleSelectBranch(e.currentTarget.value)}
-          class="text-xs font-semibold px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500"
-        >
-          {#each $retailShops as shop (shop.id)}
-            <option value={shop.shopCode}>
-              {shop.shopCode} — {shop.name} ({shop.city})
-            </option>
-          {/each}
-        </select>
+        {#if isAdmin}
+          <span
+            class="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap hidden sm:inline"
+          >
+            {$language === "vi" ? "Chọn nhanh:" : "Quick Select:"}
+          </span>
+          <select
+            value={selectedBranchCode}
+            onchange={(e) => handleSelectBranch(e.currentTarget.value)}
+            class="text-xs font-semibold px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+          >
+            {#each $retailShops as shop (shop.id)}
+              <option value={shop.shopCode}>
+                {shop.shopCode} — {shop.name} ({shop.city})
+              </option>
+            {/each}
+          </select>
+        {:else}
+          <div
+            class="text-xs font-semibold px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-600 dark:text-slate-300 flex items-center space-x-1.5 select-none"
+            title={$language === "vi" ? "Chỉ Quản trị viên (Admin) mới có quyền chuyển đổi cơ sở" : "Only Admin can switch branches"}
+          >
+            <Lock class="h-3 w-3 text-amber-500" />
+            <span>{activeShop?.shopCode || selectedBranchCode} — {activeShop?.name || 'Chi nhánh'}</span>
+          </div>
+        {/if}
         <button
           type="button"
           onclick={() => (isBranchOpen = !isBranchOpen)}
@@ -542,6 +585,23 @@
     </div>
 
     {#if isBranchOpen}
+      <!-- Notice banner for non-admin roles -->
+      {#if !isAdmin}
+        <div class="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex items-start space-x-3 text-xs text-amber-800 dark:text-amber-300">
+          <ShieldAlert class="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <div class="font-bold">
+              {$language === "vi" ? "Chỉ Quản trị viên (Admin) được phép chuyển đổi cơ sở" : "Branch Switching Restricted to Admin"}
+            </div>
+            <div class="mt-0.5 text-amber-700 dark:text-amber-400">
+              {$language === "vi"
+                ? "Tài khoản của bạn không có quyền thay đổi cơ sở hoạt động. Dưới đây là thông tin chi nhánh bạn đang trực thuộc."
+                : "Your account does not have permission to switch operational branches. Below is your assigned branch information."}
+            </div>
+          </div>
+        </div>
+      {/if}
+
       <!-- Branch Cards Grid -->
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {#each $retailShops as shop (shop.id)}
@@ -600,28 +660,48 @@
               </div>
             </div>
 
-            <button
-              type="button"
-              onclick={() => handleSelectBranch(shop.shopCode)}
-              class="w-full py-2 px-3 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center justify-center space-x-1.5 {isSelected
-                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
-                : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700'}"
-            >
-              {#if isSelected}
-                <Check class="h-3.5 w-3.5" />
-                <span
-                  >{$language === "vi"
-                    ? "Chi nhánh hiện tại"
-                    : "Current Active Branch"}</span
-                >
-              {:else}
-                <span
-                  >{$language === "vi"
-                    ? "Chuyển sang chi nhánh này"
-                    : "Switch to this Branch"}</span
-                >
-              {/if}
-            </button>
+            {#if isAdmin}
+              <button
+                type="button"
+                onclick={() => handleSelectBranch(shop.shopCode)}
+                class="w-full py-2 px-3 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center justify-center space-x-1.5 cursor-pointer {isSelected
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                  : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700'}"
+              >
+                {#if isSelected}
+                  <Check class="h-3.5 w-3.5" />
+                  <span
+                    >{$language === "vi"
+                      ? "Chi nhánh hiện tại"
+                      : "Current Active Branch"}</span
+                  >
+                {:else}
+                  <span
+                    >{$language === "vi"
+                      ? "Chuyển sang chi nhánh này"
+                      : "Switch to this Branch"}</span
+                  >
+                {/if}
+              </button>
+            {:else}
+              <div
+                class="w-full py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 select-none {isSelected
+                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                  : 'bg-slate-100 dark:bg-slate-800/50 text-slate-400 dark:text-slate-500 border border-slate-200/60 dark:border-slate-800 cursor-not-allowed opacity-75'}"
+              >
+                {#if isSelected}
+                  <Check class="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span class="font-bold">
+                    {$language === "vi" ? "Chi nhánh của bạn" : "Your Assigned Branch"}
+                  </span>
+                {:else}
+                  <Lock class="h-3.5 w-3.5 text-slate-400" />
+                  <span>
+                    {$language === "vi" ? "Chỉ Admin được đổi" : "Admin Only"}
+                  </span>
+                {/if}
+              </div>
+            {/if}
           </div>
         {/each}
       </div>

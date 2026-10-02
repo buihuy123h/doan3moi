@@ -81,7 +81,7 @@ namespace doanki3API.DTOs.Admin
         public string? DateOfJoining { get; set; }
 
         /// <summary>
-        /// Mật khẩu ban đầu cho nhân viên. Nếu không truyền sẽ đặt mặc định là "Nexus@123".
+        /// Mật khẩu ban đầu cho nhân viên. Nếu không truyền sẽ đặt mặc định là "1234567890".
         /// </summary>
         public string? Password { get; set; }
     }

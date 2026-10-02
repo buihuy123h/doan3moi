@@ -53,6 +53,7 @@
   } from "../types/nexus";
   import { isReleasedToTechnical } from "../types/nexus";
   import { toast } from "svelte-sonner";
+  import { jsPDF } from "jspdf";
   import SettingsView from "../components/common/SettingsView.svelte";
   import ProfileView from "../components/common/ProfileView.svelte";
   import ConnectionTestModal from "../components/modals/ConnectionTestModal.svelte";
@@ -89,7 +90,6 @@
     inventory,
     employees,
     retailShops,
-    updateOrderStatus,
     addEquipment,
     equipmentRequests,
     refreshEquipmentRequests,
@@ -106,7 +106,7 @@
     $employees.find(
       (employee) =>
         employee.status === "Active" && employee.role === "Field Engineer",
-    )?.id ?? "emp-03",
+    )?.id ?? "",
   );
 
   const errorMessage = (error: unknown) =>
@@ -155,6 +155,9 @@
 
   onMount(() => {
     refreshTechnicalData().catch((error) => {
+      toast.error(errorMessage(error));
+    });
+    refreshEquipmentRequests().catch((error) => {
       toast.error(errorMessage(error));
     });
   });
@@ -358,7 +361,15 @@
 
   // ACTION HANDLERS: ORDER FEASIBILITY QUEUE
   const handleMarkFeasible = async (order: Order) => {
-    // Dial-Up needs BOTH legs; other types need the single internet check.
+    if (!technicalEmployeeId) {
+      toast.error(
+        $language === "vi"
+          ? "Không tìm thấy nhân viên kỹ thuật đang hoạt động để thực hiện khảo sát."
+          : "No active field engineer is available to perform this survey.",
+      );
+      return;
+    }
+
     if (order.connectionType === "Dial-Up") {
       const legs = legFor(order);
       const landlineOk = landlineLegDone(order);
@@ -377,33 +388,26 @@
           : "Both legs verified: landline loop tested OK and internet DSLAM port available. Attenuation -16.5 dBm."
         : "Field inspection verified: line loop within 250m, attenuation -16.5 dBm. DP Box capacity confirmed OK.";
 
-    // Confirming feasibility is what issues the customer's 16-char Account ID.
-    // updateOrderStatus là hàm async — phải await, nếu không updated là Promise
-    // và nhánh kiểm tra !updated luôn sai.
-    const updated = await updateOrderStatus(
-      order.id,
-      "Feasible",
-      note,
-      undefined,
-      undefined,
-      undefined,
-      order.connectionType === "Dial-Up"
-        ? { landline: landlineLegDone(order), internet: legFor(order).internet }
-        : undefined,
-    );
-    if (!updated) {
-      toast.error(
-        $language === "vi"
-          ? "Từ chối: đơn chưa được bán hàng chi nhánh duyệt hồ sơ."
-          : "Blocked: the branch's retail staff has not approved this order yet.",
+    try {
+      const result = await updateFeasibility(order.id, {
+        isFeasible: true,
+        checkedBy: technicalEmployeeId,
+        notes: note,
+        landlineFeasible: order.connectionType === "Dial-Up" ? landlineLegDone(order) : undefined,
+        internetFeasible: order.connectionType === "Dial-Up" ? legFor(order).internet : true,
+        cableDistanceMeters: order.cableDistanceMeters,
+        dpBoxCapacity: order.dpBoxCapacity,
+        signalLossDbm: order.signalLossDbm,
+      });
+      await refreshTechnicalData();
+      toast.success(
+        result.assignedAccountId
+          ? `Order ${order.id} marked as FEASIBLE. Account ID issued: ${result.assignedAccountId}`
+          : `Order ${order.id} marked as FEASIBLE. Ready for dispatch.`,
       );
-      return;
+    } catch (error) {
+      toast.error(errorMessage(error));
     }
-    toast.success(
-      updated?.assignedAccountId
-        ? `Order ${order.id} marked as FEASIBLE. Account ID issued: ${updated.assignedAccountId}`
-        : `Order ${order.id} marked as FEASIBLE. Ready for dispatch.`,
-    );
   };
 
   const handleOpenNotFeasibleModal = (order: Order) => {
@@ -414,23 +418,37 @@
   const handleConfirmNotFeasible = async (e: SubmitEvent) => {
     e.preventDefault();
     if (!targetOrderForRejection) return;
-
-    const rejected = updateOrderStatus(
-      targetOrderForRejection.id,
-      "Not Feasible",
-      rejectionReason,
-    );
-    if (!rejected) {
+    if (!technicalEmployeeId) {
       toast.error(
         $language === "vi"
-          ? "Từ chối: đơn chưa được bán hàng chi nhánh duyệt hồ sơ."
-          : "Blocked: the branch's retail staff has not approved this order yet.",
+          ? "Không tìm thấy nhân viên kỹ thuật đang hoạt động để thực hiện khảo sát."
+          : "No active field engineer is available to perform this survey.",
       );
       return;
     }
-    toast.error(`Order ${targetOrderForRejection.id} flagged as NOT FEASIBLE.`);
-    isNotFeasibleModalOpen = false;
-    targetOrderForRejection = null;
+    if (!rejectionReason.trim()) {
+      toast.error(
+        $language === "vi" ? "Vui lòng nhập lý do không khả thi." : "A rejection reason is required.",
+      );
+      return;
+    }
+
+    try {
+      await updateFeasibility(targetOrderForRejection.id, {
+        isFeasible: false,
+        checkedBy: technicalEmployeeId,
+        notes: rejectionReason.trim(),
+        rejectionReason: rejectionReason.trim(),
+        landlineFeasible: false,
+        internetFeasible: false,
+      });
+      await refreshTechnicalData();
+      toast.error(`Order ${targetOrderForRejection.id} flagged as NOT FEASIBLE.`);
+      isNotFeasibleModalOpen = false;
+      targetOrderForRejection = null;
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
   };
 
   // Tracking connection progress per order
@@ -654,7 +672,11 @@
 
     isSavingEquipment = true;
     try {
-      await addEquipment({ ...newEquipmentForm });
+      const selectedInventory = $inventory.find((item) => item.id === newEquipmentForm.inventoryId);
+      await addEquipment({
+        ...newEquipmentForm,
+        vendorId: selectedInventory?.vendorId ?? "",
+      });
       toast.success(
         $language === "vi"
           ? `Thiết bị ${newEquipmentForm.serialNumber} đã được lưu vào CSDL thành công!`
@@ -843,6 +865,7 @@
             : `Branch ${defaultStore} is out of hardware units to provision order #${order.id}.`)
         : "",
     };
+
     isEquipmentRequestModalOpen = true;
   }
 
@@ -971,9 +994,8 @@
         !q ||
         eq.serialNumber.toLowerCase().includes(q) ||
         eq.macAddress.toLowerCase().includes(q) ||
-        eq.model.toLowerCase().includes(q) ||
-        (eq.assignedAccountId || "").toLowerCase().includes(q) ||
-        (eq.customerName || "").toLowerCase().includes(q);
+        eq.deviceModel.toLowerCase().includes(q) ||
+        (eq.assignedAccountId || "").toLowerCase().includes(q);
       return matchesStatus && matchesSearch;
     })
   );
@@ -998,6 +1020,67 @@
       invCurrentPage * invItemsPerPage
     )
   );
+
+  const exportTechnicalPdf = () => {
+    const pdf = new jsPDF();
+    const generatedAt = new Date().toLocaleString(
+      $language === "vi" ? "vi-VN" : "en-US",
+    );
+    const title = $language === "vi" ? "BÁO CÁO KỸ THUẬT" : "TECHNICAL REPORT";
+    const labels = $language === "vi"
+      ? ["Thời gian tạo", "Đơn hàng", "Kết nối", "Thiết bị", "Tồn kho"]
+      : ["Generated at", "Orders", "Connections", "Equipment", "Inventory"];
+
+    pdf.setFillColor(14, 116, 144);
+    pdf.rect(0, 0, 210, 34, "F");
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(20);
+    pdf.setFont("helvetica", "bold");
+    pdf.text(title, 16, 18);
+    pdf.setFontSize(9);
+    pdf.setFont("helvetica", "normal");
+    pdf.text("NEXUS TELECOM • FIELD ENGINEERING", 16, 27);
+
+    pdf.setTextColor(30, 41, 59);
+    pdf.setFontSize(11);
+    pdf.setFont("helvetica", "bold");
+    pdf.text(labels[0], 16, 50);
+    pdf.setFont("helvetica", "normal");
+    pdf.text(generatedAt, 62, 50);
+
+    const values = [$orders.length, $connections.length, $equipments.length, $inventory.length];
+    labels.slice(1).forEach((label, index) => {
+      const x = 16 + index * 46;
+      pdf.setFillColor(241, 245, 249);
+      pdf.roundedRect(x, 62, 40, 25, 3, 3, "F");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.setTextColor(71, 85, 105);
+      pdf.text(label, x + 4, 70);
+      pdf.setFontSize(16);
+      pdf.setTextColor(14, 116, 144);
+      pdf.text(String(values[index]), x + 4, 82);
+    });
+
+    pdf.setTextColor(30, 41, 59);
+    pdf.setFontSize(11);
+    pdf.setFont("helvetica", "bold");
+    pdf.text($language === "vi" ? "Tổng quan hàng đợi kỹ thuật" : "Technical queue overview", 16, 108);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(10);
+    const statuses = ["Pending", "Feasible", "Provisioned", "Rejected"];
+    statuses.forEach((status, index) => {
+      const count = $orders.filter((order) => order.status === status).length;
+      pdf.text(`${status}: ${count}`, 20, 120 + index * 8);
+    });
+    pdf.setDrawColor(203, 213, 225);
+    pdf.line(16, 158, 194, 158);
+    pdf.setFontSize(8);
+    pdf.setTextColor(100, 116, 139);
+    pdf.text("Nexus System • Technical role", 16, 170);
+    pdf.save(`technical-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+    toast.success($language === "vi" ? "Đã tải báo cáo PDF kỹ thuật." : "Technical PDF report downloaded.");
+  };
 
   const technicalNavItems: NavItem[] = $derived([
     {
@@ -1028,7 +1111,7 @@
     },
     {
       id: "network-diagnostics",
-      label: $language === "vi" ? "Các bản ghi đo kiểm mạng" : "Network Test Records",
+      label: $language === "vi" ? "Hồ sơ & Bản ghi đo kiểm mạng" : "Network Diagnostic Records",
       icon: Activity,
       badge: $connections.length,
       badgeColor: "bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-300",
@@ -1040,10 +1123,6 @@
 <DashboardLayout
   {activeTab}
   onTabChange={(tab) => {
-    if (tab === "network-diagnostics") {
-      openTestRecordsModal(null);
-      return;
-    }
     activeTab = tab as TechTab;
     isProvisionModalOpen = false;
     isNotFeasibleModalOpen = false;
@@ -1055,6 +1134,11 @@
   navItems={technicalNavItems}
   roleBadgeTitle={$t.roles.technical}
   pageTitle={technicalNavItems.find((n) => n.id === activeTab)?.label}
+  exportAction={{
+    label: $language === "vi" ? "Xuất PDF" : "Export PDF",
+    onClick: exportTechnicalPdf,
+  }}
+  hideDefaultPrimaryAction={activeTab !== "equipment-tracker" && activeTab !== "equipment-requests"}
   primaryAction={activeTab === "equipment-tracker"
     ? {
         label: $language === "vi" ? "Đăng ký thiết bị" : "Register Hardware",
@@ -1701,12 +1785,14 @@
           <div class="flex items-center gap-2">
             <button
               type="button"
-              onclick={() => openTestRecordsModal(null)}
+              onclick={() => {
+                activeTab = "network-diagnostics";
+              }}
               class="px-4 py-2.5 rounded-lg text-sm font-bold bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white transition shadow flex items-center justify-center space-x-1.5 whitespace-nowrap cursor-pointer"
-              title={$language === "vi" ? "Mở popup hiển thị đầy đủ chi tiết các bản ghi kiểm tra kết nối mạng của khách hàng" : "Open customer network diagnostics modal"}
+              title={$language === "vi" ? "Mở trang hồ sơ & bản ghi đo kiểm kết nối mạng" : "Open customer network diagnostics page"}
             >
               <Activity class="h-4 w-4" />
-              <span>{$language === "vi" ? "Các bản ghi đo kiểm mạng" : "Network Test Records"}</span>
+              <span>{$language === "vi" ? "Hồ sơ & Bản ghi đo kiểm mạng" : "Network Test Records"}</span>
               <span class="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">{$connections.length}</span>
             </button>
 
@@ -1793,32 +1879,6 @@
               <option value="Dial-Up">Dial-Up (Quay số)</option>
             </select>
           </div>
-        </div>
-
-        <!-- Fast Pick Tags -->
-        <div
-          class="flex flex-wrap items-center gap-2 pt-1 text-xs text-slate-500 dark:text-slate-400 font-mono"
-        >
-          <span class="text-[11px]"
-            >{$language === "vi"
-              ? "Mã tài khoản mới nhất:"
-              : "Latest Access Accounts:"}</span
-          >
-          {#each $connections as c (c.accountId)}
-            <button
-              onclick={() => {
-                techAccountSearch = c.accountId;
-                selectedConnection = c;
-                expandedAccountId = c.accountId;
-              }}
-              class="px-2 py-0.5 rounded border transition font-semibold text-[11px] {expandedAccountId ===
-              c.accountId
-                ? 'bg-amber-100 dark:bg-amber-950/60 border-amber-400 text-amber-800 dark:text-amber-300 ring-1 ring-amber-400'
-                : 'bg-slate-100 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-amber-400'}"
-            >
-              {c.accountId}
-            </button>
-          {/each}
         </div>
       </div>
 
@@ -4076,6 +4136,19 @@
     </div>
   {/if}
 
+  <!-- TAB: HỒ SƠ & BẢN GHI ĐO KIỂM KẾT NỐI MẠNG (NETWORK DIAGNOSTICS) -->
+  {#if activeTab === "network-diagnostics"}
+    <div class="space-y-6">
+      <ConnectionTestModal
+        isOpen={true}
+        isPage={true}
+        connection={targetConnectionForTestModal || selectedConnection || $connections[0] || null}
+        connectionsList={$connections}
+        onClose={() => (activeTab = "connection-manager")}
+      />
+    </div>
+  {/if}
+
   <!-- SETTINGS TAB -->
   {#if activeTab === "settings"}
     <SettingsView />
@@ -4087,9 +4160,9 @@
   {/if}
 </DashboardLayout>
 
-<!-- POPUP MODAL: CHI TIẾT BẢN GHI KIỂM TRA KẾT NỐI MẠNG CỦA KHÁCH HÀNG -->
+<!-- POPUP MODAL: CHI TIẾT BẢN GHI KIỂM TRA KẾT NỐI MẠNG (KHI Ở TAB KHÁC) -->
 <ConnectionTestModal
-  isOpen={isTestRecordsModalOpen}
+  isOpen={isTestRecordsModalOpen && activeTab !== "network-diagnostics"}
   connection={targetConnectionForTestModal}
   connectionsList={$connections}
   onClose={() => {

@@ -134,14 +134,20 @@ public sealed class EquipmentRequestsController : ControllerBase
             return BadRequest(new { message = $"Chi nhánh không tồn tại: {request.StoreId}" });
 
         var employeeId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (string.IsNullOrWhiteSpace(employeeId) || !await _context.Employees.AnyAsync(e => e.EmployeeId == employeeId, cancellationToken))
+        if (string.IsNullOrWhiteSpace(employeeId))
         {
-            // Fallback to active technician if employee claim missing
-            var fallbackEmp = await _context.Employees.FirstOrDefaultAsync(e => e.Role == EmployeeRoles.FieldEngineer, cancellationToken);
-            employeeId = fallbackEmp?.EmployeeId ?? "emp-03";
+            return Unauthorized(new { message = "Không xác định được nhân viên thực hiện." });
         }
 
-        var employee = await _context.Employees.FirstAsync(e => e.EmployeeId == employeeId, cancellationToken);
+        var employee = await _context.Employees.FirstOrDefaultAsync(
+            e => e.EmployeeId == employeeId &&
+                 e.Status == EmployeeStatuses.Active &&
+                 (e.Role == EmployeeRoles.FieldEngineer || e.Role == EmployeeRoles.Manager),
+            cancellationToken);
+        if (employee is null)
+        {
+            return BadRequest(new { message = "Nhân viên thực hiện không tồn tại, đã ngừng hoạt động hoặc không có quyền kỹ thuật." });
+        }
 
         var requestId = $"REQ-{DateTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}";
         var entity = new EquipmentRequest

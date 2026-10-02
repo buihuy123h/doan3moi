@@ -73,6 +73,7 @@
   } from "../lib/api";
   import { authStore } from "../context/AuthContext";
   import { fly, fade } from "svelte/transition";
+  import { onMount } from "svelte";
   import Pagination from "../components/common/Pagination.svelte";
 
   type AdminTab =
@@ -123,6 +124,12 @@
   } = nexusStore;
   const { t, language } = languageStore;
 
+  onMount(() => {
+    refreshEquipmentRequests().catch((error) => {
+      toast.error(error instanceof Error ? error.message : "Không thể tải yêu cầu thiết bị");
+    });
+  });
+
   // Active navigation tab
   let activeTab = $state<AdminTab>("overview");
 
@@ -172,8 +179,8 @@
     retailShopAssigned: "Downtown Flagship (SH-01)",
     status: "Active" as Employee["status"],
     dateOfJoining: new Date().toISOString().slice(0, 10),
-    password: "",
-    showPassword: false,
+    password: "1234567890",
+    showPassword: true,
   });
 
   // Vendor Modal State
@@ -762,8 +769,8 @@
           emp.retailShopAssigned || "Downtown Flagship (SH-01)",
         status: emp.status,
         dateOfJoining: emp.dateOfJoining,
-        password: "",
-        showPassword: false,
+        password: "1234567890",
+        showPassword: true,
       };
     } else {
       editingEmployee = null;
@@ -777,8 +784,8 @@
         retailShopAssigned: "Headquarters (General)",
         status: "Active",
         dateOfJoining: new Date().toISOString().slice(0, 10),
-        password: "",
-        showPassword: false,
+        password: "1234567890",
+        showPassword: true,
       };
     }
     isEmployeeModalOpen = true;
@@ -977,6 +984,7 @@
           ? "Admin đã duyệt và xuất kho/nhập thiết bị về chi nhánh."
           : "Admin approved and stocked items to the branch."
       );
+      await refreshEquipmentRequests();
       toast.success(
         $language === "vi"
           ? `Đã nhập kho ${req.quantity} × ${req.itemName} cho chi nhánh ${req.storeName || req.storeId}! Kỹ thuật viên có thể cấp thiết bị ngay.`
@@ -992,6 +1000,7 @@
   async function handleApproveRequest(req: EquipmentRequest) {
     try {
       await setEquipmentRequestStatus(req.id, "Approved", "Đã duyệt yêu cầu, đang chuẩn bị điều phối hàng.");
+      await refreshEquipmentRequests();
       toast.success($language === "vi" ? `Đã duyệt yêu cầu #${req.id}.` : `Approved request #${req.id}.`);
     } catch (err: any) {
       toast.error(err?.message || "Lỗi duyệt yêu cầu");
@@ -1008,6 +1017,7 @@
     if (reason === null) return;
     try {
       await setEquipmentRequestStatus(req.id, "Rejected", reason || "Từ chối bởi Admin");
+      await refreshEquipmentRequests();
       toast.info($language === "vi" ? `Đã từ chối yêu cầu #${req.id}.` : `Rejected request #${req.id}.`);
     } catch (err: any) {
       toast.error(err?.message || "Lỗi từ chối yêu cầu");

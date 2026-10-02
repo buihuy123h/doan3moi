@@ -56,12 +56,14 @@
     isOpen = false,
     connection = null,
     connectionsList = [],
+    isPage = false,
     onClose,
   }: {
-    isOpen: boolean;
-    connection: Connection | null;
+    isOpen?: boolean;
+    connection?: Connection | null;
     connectionsList?: Connection[];
-    onClose: () => void;
+    isPage?: boolean;
+    onClose?: () => void;
   } = $props();
 
   const { language } = languageStore;
@@ -349,17 +351,7 @@
   }
 </script>
 
-{#if isOpen}
-  <!-- Backdrop -->
-  <div
-    class="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-200"
-    role="dialog"
-    aria-modal="true"
-  >
-    <!-- Modal Card Container -->
-    <div
-      class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden text-slate-800 dark:text-slate-100 transition-all transform scale-100"
-    >
+{#snippet modalBody()}
       <!-- MODAL TOP BAR / HEADER -->
       <div
         class="px-5 py-4 bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-700 text-white flex items-center justify-between shadow-md shrink-0"
@@ -406,14 +398,16 @@
             <span class="hidden md:inline">CSV</span>
           </button>
 
-          <!-- Close Modal -->
-          <button
-            onclick={onClose}
-            class="h-8 w-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition active:scale-90 cursor-pointer"
-            title={$language === 'vi' ? 'Đóng' : 'Close'}
-          >
-            <X class="h-5 w-5" />
-          </button>
+          {#if !isPage}
+            <!-- Close Modal -->
+            <button
+              onclick={onClose}
+              class="h-8 w-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition active:scale-90 cursor-pointer"
+              title={$language === 'vi' ? 'Đóng' : 'Close'}
+            >
+              <X class="h-5 w-5" />
+            </button>
+          {/if}
         </div>
       </div>
 
@@ -1093,16 +1087,38 @@
           <span>{$language === 'vi' ? 'Hệ thống giám sát viễn thông cấp NOC hoạt động 24/7' : 'NOC automated monitoring 24/7 active'}</span>
         </div>
 
-        <div class="flex items-center space-x-2">
-          <button
-            type="button"
-            onclick={onClose}
-            class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition cursor-pointer"
-          >
-            {$language === 'vi' ? 'Đóng cửa sổ' : 'Close Window'}
-          </button>
-        </div>
+        {#if !isPage}
+          <div class="flex items-center space-x-2">
+            <button
+              type="button"
+              onclick={onClose}
+              class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+            >
+              {$language === 'vi' ? 'Đóng cửa sổ' : 'Close Window'}
+            </button>
+          </div>
+        {/if}
       </div>
+{/snippet}
+
+{#if isPage}
+  <div
+    class="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm flex flex-col overflow-hidden text-slate-800 dark:text-slate-100"
+  >
+    {@render modalBody()}
+  </div>
+{:else if isOpen}
+  <!-- Backdrop -->
+  <div
+    class="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-200"
+    role="dialog"
+    aria-modal="true"
+  >
+    <!-- Modal Card Container -->
+    <div
+      class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden text-slate-800 dark:text-slate-100 transition-all transform scale-100"
+    >
+      {@render modalBody()}
     </div>
   </div>
 {/if}

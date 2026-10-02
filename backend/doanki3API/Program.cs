@@ -120,7 +120,12 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// The shipped launchers and Compose stack expose HTTP only. Enable this explicitly
+// when an HTTPS endpoint and certificate are configured for the host.
+if (builder.Configuration.GetValue("HttpsRedirection:Enabled", false))
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseCors("AllowFrontend");
 

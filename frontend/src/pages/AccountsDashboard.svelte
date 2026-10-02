@@ -255,13 +255,21 @@
 
   function handleSendBulkReminders() {
     const unpaidList = $bills.filter((b) => b.status !== "Paid");
+    if (unpaidList.length === 0) {
+      toast.info(
+        $language === "vi"
+          ? "Hiện tất cả khách hàng đã thanh toán đầy đủ, không có công nợ cần nhắc nhở!"
+          : "All subscribers are up to date! No pending reminders needed.",
+      );
+      return;
+    }
     unpaidList.forEach((b) => {
       remindedBillIds[b.id] = true;
     });
     toast.success(
       $language === "vi"
-        ? `Đã gửi thông báo nhắc nhở thanh toán tự động đến toàn bộ ${unpaidList.length} khách hàng chưa thanh toán đủ!`
-        : `Dispatched automated payment reminder alerts to all ${unpaidList.length} outstanding subscribers!`,
+        ? `Đã tự động gửi thông báo nhắc nhở thanh toán (SMS & Email) đến toàn bộ ${unpaidList.length} khách hàng chưa thanh toán!`
+        : `Dispatched automated payment reminder alerts (SMS & Email) to all ${unpaidList.length} outstanding subscribers!`,
     );
   }
 
@@ -744,8 +752,8 @@
     if (!billAccountId.trim()) {
       toast.error(
         $language === "vi"
-          ? "Vui lòng nhập mã tài khoản 16 ký tự hợp lệ."
-          : "Please input a valid 16-character Account ID.",
+          ? "Vui lòng nhập mã tài khoản hợp lệ."
+          : "Please input a valid Account ID.",
       );
       return;
     }
@@ -1185,19 +1193,6 @@
                   ? 'Tra cứu kết nối đường truyền, kiểm tra thông số kỹ thuật và bấm "Chi tiết & Lập HĐ" để nạp ngay sang giao diện phát hành hóa đơn cước.'
                   : 'Look up customer links, inspect tariff rates, and click "Details & Bill" to jump straight into bill generation.'}
               </p>
-            </div>
-
-            <!-- Quick Counter Badge -->
-            <div
-              class="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs shrink-0"
-            >
-              <span class="text-slate-500"
-                >{$language === "vi" ? "Hiển thị:" : "Showing:"}</span
-              >
-              <strong class="font-mono text-blue-600 dark:text-blue-400 ml-1.5"
-                >{filteredAndSortedConnections.length}</strong
-              >
-              <span class="text-slate-400"> / {$connections.length}</span>
             </div>
           </div>
 
@@ -1681,11 +1676,11 @@
 
     <!-- TAB 1: BILL GENERATION -->
     {#if activeTab === "bill-generation"}
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="w-full">
         <!-- Bill Generator Form -->
         <form
           onsubmit={handleGenerateBillSubmit}
-          class="lg:col-span-2 space-y-6 bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm"
+          class="w-full space-y-6 bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm"
         >
           <!-- Account ID Input Section -->
           <div>
@@ -1693,8 +1688,8 @@
               class="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5"
             >
               {$language === "vi"
-                ? "Mã tài khoản thuê bao 16 ký tự *"
-                : "16-character Subscriber Account ID *"}
+                ? "Mã tài khoản thuê bao  *"
+                : "Subscriber Account ID *"}
             </label>
             <div class="flex gap-2">
               <div class="relative flex-1">
@@ -1715,49 +1710,6 @@
                 {$language === "vi" ? "Tải thông số" : "Fetch Parameters"}
               </button>
             </div>
-
-            <!-- Unbilled New Connections Alert -->
-            {#if unbilledConnections.length > 0}
-              <div
-                class="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
-              >
-                <div
-                  class="flex items-center space-x-2 text-xs text-amber-800 dark:text-amber-300"
-                >
-                  <span
-                    class="inline-flex h-2 w-2 rounded-full bg-amber-500 animate-ping"
-                  ></span>
-                  <span class="font-bold">
-                    {$language === "vi"
-                      ? `Có ${unbilledConnections.length} kết nối mới cấp chưa xuất hóa đơn đầu kỳ:`
-                      : `${unbilledConnections.length} newly provisioned connection(s) awaiting initial bill:`}
-                  </span>
-                </div>
-                <div class="flex flex-wrap gap-1.5 items-center">
-                  {#each paginatedUnbilled as uc (uc.accountId)}
-                    <button
-                      type="button"
-                      onclick={() =>
-                        handleSelectConnectionForBilling(uc.accountId)}
-                      class="px-2.5 py-1 text-xs font-mono font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition shadow-xs flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <span>{uc.accountId}</span>
-                      <span class="text-[10px] font-normal opacity-90"
-                        >({uc.customerName})</span
-                      >
-                    </button>
-                  {/each}
-                  {#if unbilledConnections.length > unbilledItemsPerPage}
-                    <Pagination
-                      bind:currentPage={unbilledCurrentPage}
-                      totalItems={unbilledConnections.length}
-                      pageSize={unbilledItemsPerPage}
-                      compact={true}
-                    />
-                  {/if}
-                </div>
-              </div>
-            {/if}
 
             <!-- 3 Recent Accounts Selection (Chỉ lưu lại 3 tài khoản gần đây nhất) -->
             <div class="flex flex-wrap items-center gap-2 pt-2 text-xs">
@@ -2113,17 +2065,6 @@
                 </div>
               {/if}
             </div>
-          {:else}
-            <div
-              class="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2"
-            >
-              <AlertCircle class="h-4 w-4 shrink-0 text-amber-600" />
-              <span>
-                {$language === "vi"
-                  ? "Mã tài khoản hiện chưa có trong bộ nhớ. Bạn vẫn có thể nhập các số liệu thanh toán thủ công bên dưới."
-                  : "Account ID not currently bound in memory. You may still input manual billing figures below."}
-              </span>
-            </div>
           {/if}
 
           <!-- Billing Period Selector -->
@@ -2188,7 +2129,7 @@
                 <tbody
                   class="divide-y divide-slate-100 dark:divide-slate-800 text-xs"
                 >
-                  <!-- Line Item 1: Security Deposit -->
+
                   <tr>
                     <td class="px-4 py-3">
                       <div class="font-semibold text-slate-900 dark:text-white">
@@ -2213,7 +2154,7 @@
                     </td>
                   </tr>
 
-                  <!-- Line Item 2: Monthly Rentals -->
+
                   <tr>
                     <td class="px-4 py-3">
                       <div class="font-semibold text-slate-900 dark:text-white">
@@ -2238,7 +2179,7 @@
                     </td>
                   </tr>
 
-                  <!-- Line Item 3: Hourly / Metered Charges -->
+
                   <tr>
                     <td class="px-4 py-3">
                       <div class="font-semibold text-slate-900 dark:text-white">
@@ -2263,7 +2204,7 @@
                     </td>
                   </tr>
 
-                  <!-- Line Item 3b: Bulk / corporate scheme discount -->
+
                   <tr class="bg-emerald-50/50 dark:bg-emerald-950/30">
                     <td class="px-4 py-3">
                       <div
@@ -2323,7 +2264,7 @@
                     >
                   </tr>
 
-                  <!-- Line Item 5: AUTOMATED ROW FOR SERVICE TAX (12.24%) -->
+
                   <tr class="bg-blue-50/50 dark:bg-blue-950/40">
                     <td class="px-4 py-3">
                       <div class="flex items-center space-x-2">
@@ -2356,7 +2297,7 @@
                     >
                   </tr>
 
-                  <!-- Grand Total Row -->
+
                   <tr class="bg-slate-900 text-white font-bold text-sm">
                     <td class="px-4 py-3 uppercase tracking-wider text-xs">
                       {$language === "vi"
@@ -2373,7 +2314,7 @@
             </div>
           </div>
 
-          <!-- Action Buttons -->
+
           <div class="flex flex-wrap items-center justify-end gap-3 pt-2">
             <button
               type="button"
@@ -2404,138 +2345,6 @@
             </button>
           </div>
         </form>
-
-        <!-- Financial Ledger Quick View -->
-        <div class="space-y-4">
-          <div
-            class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4"
-          >
-            <h3
-              class="font-semibold text-sm uppercase tracking-wider text-slate-900 dark:text-white flex items-center space-x-2"
-            >
-              <Building class="h-4 w-4 text-blue-500" />
-              <span
-                >{$language === "vi"
-                  ? "Tuân thủ thuế quy định"
-                  : "Statutory Tax Compliance"}</span
-              >
-            </h3>
-
-            <p class="text-xs text-slate-500 leading-relaxed">
-              {$language === "vi"
-                ? `Theo quy định hệ thống dịch vụ viễn thông, mọi thuê bao phát hành đều áp dụng thuế suất dịch vụ bắt buộc ${$settings.serviceTaxRate}% trên tiền đặt cọc và cước thuê thiết bị.`
-                : `Under telecom marketing system regulations, all issued subscriptions apply a statutory ${$settings.serviceTaxRate}% Service Tax across equipment deposit and rental line items.`}
-            </p>
-
-            <div
-              class="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2 text-xs font-mono"
-            >
-              <div class="flex justify-between">
-                <span class="text-slate-500"
-                  >{$language === "vi"
-                    ? "Danh mục thuế:"
-                    : "Tax Category:"}</span
-                >
-                <span class="text-slate-900 dark:text-white"
-                  >{$language === "vi"
-                    ? "Dịch vụ viễn thông"
-                    : "Telecommunication Services"}</span
-                >
-              </div>
-              <div class="flex justify-between">
-                <span class="text-slate-500"
-                  >{$language === "vi"
-                    ? "Mã số thuế:"
-                    : "Tax Identifier:"}</span
-                >
-                <span class="text-slate-900 dark:text-white"
-                  >ST-NEX-FED-1224</span
-                >
-              </div>
-              <div class="flex justify-between">
-                <span class="text-slate-500"
-                  >{$language === "vi"
-                    ? "Thuế suất dịch vụ:"
-                    : "Service Tax Rate:"}</span
-                >
-                <span class="text-blue-600 font-bold"
-                  >{$settings.serviceTaxRate}%</span
-                >
-              </div>
-            </div>
-          </div>
-
-          <!-- Recent Bills Created -->
-          <div
-            class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-3"
-          >
-            <div class="flex items-center justify-between">
-              <h3
-                class="font-semibold text-xs uppercase tracking-wider text-slate-500"
-              >
-                {$language === "vi"
-                  ? "Hóa đơn vừa phát hành"
-                  : "Recent Generated Invoices"}
-              </h3>
-              <button
-                onclick={() => (activeTab = "subscriber-tracking")}
-                class="text-xs text-blue-600 hover:underline"
-              >
-                {$language === "vi" ? "Theo dõi →" : "Tracking →"}
-              </button>
-            </div>
-
-            <div
-              class="divide-y divide-slate-100 dark:divide-slate-800 text-xs"
-            >
-              {#each $bills.slice(0, 3) as b (b.id)}
-                <div class="py-2.5 flex items-center justify-between">
-                  <div>
-                    <div
-                      class="font-mono font-bold text-slate-900 dark:text-white"
-                    >
-                      {b.invoiceNumber}
-                    </div>
-                    <div class="text-slate-500 truncate max-w-[140px]">
-                      {b.customerName}
-                    </div>
-                  </div>
-                  <div class="text-right flex items-center gap-2">
-                    <div>
-                      <div
-                        class="font-mono font-bold text-slate-900 dark:text-white tabular-nums"
-                      >
-                        ${b.totalAmount.toFixed(2)}
-                      </div>
-                      <span
-                        class="text-[10px] px-1.5 py-0.5 rounded font-semibold {b.status ===
-                        'Paid'
-                          ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
-                          : 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'}"
-                      >
-                        {$language === "vi"
-                          ? b.status === "Paid"
-                            ? "Đã thanh toán"
-                            : "Chờ thanh toán"
-                          : b.status}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onclick={() => handleExportBillPdf(b)}
-                      class="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition shadow-2xs cursor-pointer"
-                      title={$language === "vi"
-                        ? "Xuất hóa đơn file PDF (Invoice.pdf)"
-                        : "Export Invoice.pdf"}
-                    >
-                      <Download class="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </div>
-        </div>
       </div>
     {/if}
     <!-- TAB 2: SUBSCRIBER TRACKING & PAYMENT HISTORY -->
@@ -2566,11 +2375,28 @@
               </p>
             </div>
 
-            <div class="flex items-center space-x-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onclick={handleSendBulkReminders}
+                class="px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center space-x-1.5 cursor-pointer active:scale-95"
+                title={$language === "vi" ? "Tự động gửi thông báo nhắc nhở thanh toán cho tất cả khách hàng còn nợ cước" : "Auto send payment reminders to all outstanding customers"}
+              >
+                <Bell class="h-3.5 w-3.5 animate-pulse" />
+                <span>
+                  {$language === "vi"
+                    ? "Tự động nhắc nhở cho tất cả khách hàng"
+                    : "Auto Remind All Customers"}
+                </span>
+                <span class="px-1.5 py-0.5 rounded-full bg-white/25 text-[10px] font-mono font-bold">
+                  {$bills.filter((b) => b.status !== "Paid").length}
+                </span>
+              </button>
+
               <button
                 type="button"
                 onclick={() => (showScheduleConfigModal = true)}
-                class="px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-700 hover:to-sky-700 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center space-x-1.5"
+                class="px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-700 hover:to-sky-700 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center space-x-1.5 cursor-pointer"
               >
                 <Clock class="h-3.5 w-3.5" />
                 <span

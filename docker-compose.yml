@@ -32,7 +32,7 @@ services:
       sqlserver:
         condition: service_healthy
     volumes:
-      - ./frontend/NexusSystem_Database.sql:/scripts/NexusSystem_Database.sql:ro
+      - ./backend/NexusSystem_Database.sql:/scripts/NexusSystem_Database.sql:ro
     entrypoint:
       - /bin/bash
       - -c
@@ -53,6 +53,12 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
 
   api:
@@ -64,13 +70,15 @@ services:
       sqlserver-init:
         condition: service_completed_successfully
       mongodb:
-        condition: service_started
+        condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:5105
       # Ghi đè connection strings của appsettings.json để trỏ vào container
       - ConnectionStrings__MyAppDbContext=Server=sqlserver;Database=NexusSystem;User Id=sa;Password=Nexus@12345;Trust Server Certificate=True
       - Mongo__ConnectionString=mongodb://mongodb:27017
+      - Jwt__Key=${NEXUS_JWT_KEY:-local-development-only-change-this-key}
+      - Jwt__Issuer=${NEXUS_JWT_ISSUER:-doanki3API}
     ports:
       - "5105:5105"
     restart: unless-stopped
@@ -79,7 +87,8 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_URL: http://localhost:5105
+        # Use the nginx reverse proxy so the same image works on any host.
+        VITE_API_URL: ""
     container_name: nexus_web
     depends_on:
       - api

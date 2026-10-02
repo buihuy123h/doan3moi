@@ -240,8 +240,8 @@ namespace doanki3API.Controllers.Admin
                 storeId = store?.StoreId;
             }
 
-            // Hash mật khẩu (nếu không có mật khẩu nhập vào thì mặc định Nexus@123)
-            var rawPassword = string.IsNullOrWhiteSpace(request.Password) ? "Nexus@123" : request.Password.Trim();
+            // Hash mật khẩu (nếu không có mật khẩu nhập vào thì dùng mật khẩu demo thống nhất)
+            var rawPassword = string.IsNullOrWhiteSpace(request.Password) ? "1234567890" : request.Password.Trim();
             var passwordHash = BCrypt.Net.BCrypt.HashPassword(rawPassword, 10);
 
             var dateOfJoining = DateOnly.FromDateTime(DateTime.UtcNow);

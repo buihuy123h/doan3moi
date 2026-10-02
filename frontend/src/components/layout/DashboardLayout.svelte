@@ -54,6 +54,8 @@
     exportAction,
     primaryAction,
     customHeaderActions,
+    hideDefaultPrimaryAction = false,
+    hideExportAction = false,
   }: {
     activeTab: string;
     onTabChange: (tabId: string) => void;
@@ -64,6 +66,8 @@
     exportAction?: { label?: string; onClick: () => void };
     primaryAction?: { label: string; onClick: () => void; icon?: any };
     customHeaderActions?: Snippet;
+    hideDefaultPrimaryAction?: boolean;
+    hideExportAction?: boolean;
   } = $props();
 
   const { currentUser, logout } = authStore;
@@ -598,21 +602,23 @@
 
             <!-- Action buttons (Export + Primary Action) -->
             <div class="flex items-center space-x-2.5">
-              <button
-                onclick={exportAction?.onClick ||
-                  (() =>
-                    toast.success(
-                      $language === "vi"
-                        ? "Đang xuất báo cáo tổng quan..."
-                        : "Exporting overview report...",
-                    ))}
-                class="flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-white dark:bg-[#1E3349] hover:bg-sky-50 dark:hover:bg-[#253E58] border border-[#CCE4F7] dark:border-[#253D56] text-[#1B2D40] dark:text-[#E0F1FF] shadow-xs transition active:scale-95"
-              >
-                <Download
-                  class="h-3.5 w-3.5 text-[#537292] dark:text-[#8DB0D4]"
-                />
-                <span>{exportAction?.label || $t.actions.export}</span>
-              </button>
+              {#if !hideExportAction}
+                <button
+                  onclick={exportAction?.onClick ||
+                    (() =>
+                      toast.success(
+                        $language === "vi"
+                          ? "Đang xuất báo cáo tổng quan..."
+                          : "Exporting overview report...",
+                      ))}
+                  class="flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-white dark:bg-[#1E3349] hover:bg-sky-50 dark:hover:bg-[#253E58] border border-[#CCE4F7] dark:border-[#253D56] text-[#1B2D40] dark:text-[#E0F1FF] shadow-xs transition active:scale-95"
+                >
+                  <Download
+                    class="h-3.5 w-3.5 text-[#537292] dark:text-[#8DB0D4]"
+                  />
+                  <span>{exportAction?.label || $t.actions.export}</span>
+                </button>
+              {/if}
 
               {#if primaryAction}
                 <button
@@ -627,7 +633,7 @@
                   {/if}
                   <span>{primaryAction.label}</span>
                 </button>
-              {:else}
+              {:else if !hideDefaultPrimaryAction}
                 <button
                   onclick={() => toast.info($t.actions.newReport)}
                   class="flex items-center space-x-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white shadow-xs transition active:scale-95"

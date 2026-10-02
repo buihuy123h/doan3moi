@@ -6,7 +6,7 @@ const DATABASE = 'NexusSystem';
 export function runSqlQuery(sqlQuery) {
   try {
     const input = `SET NOCOUNT ON;\n${sqlQuery}\nGO\n`;
-    const res = spawnSync('sqlcmd', ['-S', SERVER, '-d', DATABASE, '-y', '0', '-w', '65535'], {
+    const res = spawnSync('sqlcmd', ['-S', SERVER, '-d', DATABASE, '-f', '65001', '-y', '0', '-w', '65535'], {
       input,
       encoding: 'utf8',
       maxBuffer: 20 * 1024 * 1024
@@ -26,7 +26,8 @@ export function runSqlQuery(sqlQuery) {
         .replace(/â€/g, '')
         .replace(/[\u201C\u201D]/g, "'")
         .replace(/[\u2018\u2019]/g, "'")
-        .replace(/\?\"/g, '"');
+        .replace(/\?\"/g, '"')
+        .replace(/([^\\])"(?=\s+[a-zA-Z0-9\u00C0-\u024F\u1EA0-\u1EF9])/g, "$1'");
       try {
         return JSON.parse(sanitized);
       } catch (innerErr) {
@@ -91,8 +92,8 @@ export function getAllDatabaseData() {
 
     const retailShops = runSqlQuery(`
       SELECT 
-        LOWER(StoreID) AS id, 
-        StoreID AS shopCode, 
+        UPPER(StoreID) AS id,
+        UPPER(StoreID) AS shopCode,
         Name AS name, 
         City AS city, 
         CityCode AS cityCode, 

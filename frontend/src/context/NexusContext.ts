@@ -1804,13 +1804,13 @@ function createNexusStore() {
   };
 
   // ---- Assign Technician for Feasibility Survey ----
-  const assignTechnicianToOrder = (
+  const assignTechnicianToOrder = async (
     orderId: string,
     technicianName: string,
     technicianId?: string,
     technicianPhone?: string,
     surveyNotes?: string
-  ): Order | null => {
+  ): Promise<Order | null> => {
     let updatedOrder: Order | null = null;
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
@@ -1823,39 +1823,37 @@ function createNexusStore() {
       return null;
     }
 
+    const currentOrder = get(orders).find((ord) => ord.id === orderId);
+    if (!currentOrder) return null;
+
+    const notes = surveyNotes?.trim();
+    const combinedNotes = notes
+      ? currentOrder.feasibilityNotes
+        ? `${currentOrder.feasibilityNotes} | ${notes}`
+        : notes
+      : currentOrder.feasibilityNotes;
+    const nextOrder: Order = {
+      ...currentOrder,
+      assignedTechnician: technicianName,
+      assignedTechnicianId: technicianId,
+      assignedTechnicianPhone: technicianPhone,
+      assignedTechnicianDate: assignedStamp,
+      feasibilityNotes: combinedNotes,
+    };
+
+    // Ghi backend trước; chỉ cập nhật store sau khi server xác nhận để đổi lựa chọn
+    // không bị hiển thị thành công giả khi request lỗi.
+    await updateOrderStatusApi(orderId, {
+      status: nextOrder.status,
+      assignedTechnician: technicianName,
+      assignedTechnicianId: technicianId,
+      assignedTechnicianPhone: technicianPhone,
+    });
+
     orders.update((prev) =>
-      prev.map((ord) => {
-        if (ord.id === orderId) {
-          const notes = surveyNotes?.trim();
-          const combinedNotes = notes
-            ? ord.feasibilityNotes
-              ? `${ord.feasibilityNotes} | ${notes}`
-              : notes
-            : ord.feasibilityNotes;
-
-          updatedOrder = {
-            ...ord,
-            assignedTechnician: technicianName,
-            assignedTechnicianId: technicianId,
-            assignedTechnicianPhone: technicianPhone,
-            assignedTechnicianDate: assignedStamp,
-            feasibilityNotes: combinedNotes,
-          };
-          return updatedOrder;
-        }
-        return ord;
-      })
+      prev.map((ord) => (ord.id === orderId ? nextOrder : ord)),
     );
-
-    if (updatedOrder) {
-      updateOrderStatusApi(orderId, {
-        status: (updatedOrder as Order).status,
-        assignedTechnician: technicianName,
-        assignedTechnicianId: technicianId,
-        assignedTechnicianPhone: technicianPhone,
-      }).catch((err) => console.warn('[Nexus] Backend technician assignment fallback:', err));
-    }
-
+    updatedOrder = nextOrder;
     return updatedOrder;
   };
 
@@ -2010,27 +2008,23 @@ function createNexusStore() {
 
   // ---- Equipment Handlers ----
   const addEquipment = async (eq: Omit<Equipment, 'id'>) => {
-    try {
-      const created = await createEquipmentApi({
-        serialNumber: eq.serialNumber,
-        macAddress: eq.macAddress,
-        deviceModel: eq.deviceModel,
-        deviceType: eq.deviceType,
-        firmwareVersion: eq.firmwareVersion,
-        status: eq.status || 'In Stock',
-      });
-      const newEq: Equipment = {
-        ...eq,
-        id: created.equipmentId || `eq-${Date.now()}`,
-      };
-      equipments.update((prev) => [newEq, ...prev]);
-      return newEq;
-    } catch (err) {
-      console.warn('[Nexus] API add equipment failed, saving locally:', err);
-      const fallbackEq = { ...eq, id: `eq-${Date.now()}` };
-      equipments.update((prev) => [fallbackEq, ...prev]);
-      return fallbackEq;
-    }
+    const created = await createEquipmentApi({
+      inventoryId: eq.inventoryId,
+      serialNumber: eq.serialNumber,
+      macAddress: eq.macAddress,
+      deviceModel: eq.deviceModel,
+      deviceType: eq.deviceType,
+      vendorId: eq.vendorId,
+      storeId: eq.storeId,
+      firmwareVersion: eq.firmwareVersion,
+      status: eq.status || 'In Stock',
+    });
+    const newEq: Equipment = {
+      ...eq,
+      id: created.equipmentId || `eq-${Date.now()}`,
+    };
+    equipments.update((prev) => [newEq, ...prev]);
+    return newEq;
   };
 
   const updateEquipment = (id: string, updated: Partial<Equipment>) => {
@@ -2622,20 +2616,25 @@ function createNexusStore() {
         }
 
         if (Array.isArray(apiShops) && apiShops.length > 0) {
-          retailShops.set(mergeById(get(retailShops), apiShops.map((s: any) => ({
-            id: s.storeId,
-            shopCode: s.storeId || s.shopCode,
-            name: s.name,
-            city: s.city || '',
-            cityCode: s.cityCode || '',
-            address: s.address || '',
-            managerName: s.managerName || '',
-            phone: s.phone || '',
-            operatingHours: s.operatingHours || '',
-            activeEmployeesCount: s.activeEmployeesCount ?? 0,
-            totalSubscribersServed: s.totalSubscribersServed ?? 0,
-            status: s.status || 'Active',
-          }))));
+          // The backend is authoritative for branches. Replacing the local seed
+          // also removes stale lowercase copies such as `sh-01` after login.
+          retailShops.set(apiShops.map((s: any) => {
+            const storeId = String(s.storeId || s.shopCode || s.id || '').toUpperCase();
+            return {
+              id: storeId,
+              shopCode: storeId,
+              name: s.name,
+              city: s.city || '',
+              cityCode: s.cityCode || '',
+              address: s.address || '',
+              managerName: s.managerName || '',
+              phone: s.phone || '',
+              operatingHours: s.operatingHours || '',
+              activeEmployeesCount: s.activeEmployeesCount ?? 0,
+              totalSubscribersServed: s.totalSubscribersServed ?? 0,
+              status: s.status || 'Active',
+            };
+          }));
         }
 
         if (Array.isArray(apiVendors) && apiVendors.length > 0) {
@@ -2662,7 +2661,7 @@ function createNexusStore() {
             phone: e.phone || '',
             role: e.role || 'Retail Staff',
             department: e.department || '',
-            retailShopAssigned: e.storeId || undefined,
+            retailShopAssigned: e.branchCode || e.storeId || undefined,
             status: e.status || 'Active',
             dateOfJoining: e.dateOfJoining ? String(e.dateOfJoining).slice(0, 10) : '',
             avatar: e.avatarUrl || undefined,

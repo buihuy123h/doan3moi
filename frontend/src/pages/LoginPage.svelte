@@ -83,7 +83,7 @@
 
   // Staff credential login (email + password against the backend API).
   let staffEmail = $state('');
-  let staffPassword = $state('');
+  let staffPassword = $state('1234567890');
   let staffSubmitting = $state(false);
   let staffError = $state('');
 
@@ -676,37 +676,6 @@
             <!-- Nút demo thứ hai phải là tài khoản KHÁC nút đầu. Trước đây dò cứng
                  'B064-000000000002' — trùng đúng $connections[0] nên hai nút hiện y hệt nhau. -->
             {@const indConn = $connections.find((c) => c.accountId !== demoAccountId)}
-            <div class="mt-4 p-3 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 space-y-2">
-              <div class="text-[11px] font-bold text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
-                <Sparkles class="h-3 w-3 text-purple-500" />
-                <span>{$t.auth.demoAccountTitle}</span>
-              </div>
-              <p class="text-[10px] text-purple-600/80 dark:text-purple-400/80 leading-snug">
-                {$language === 'vi'
-                  ? 'Lối tắt trình diễn — vào thẳng, bỏ qua bước OTP vì email của dữ liệu mẫu không có thật.'
-                  : 'Demo shortcut — signs in directly and skips OTP, because the seeded emails are not real.'}
-              </p>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onclick={() => { accountId = demoAccountId; signIn(demoAccountId); }}
-                  class="p-2 text-left rounded-lg bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 hover:border-purple-400 transition cursor-pointer"
-                >
-                  <div class="font-mono text-[11px] font-bold text-purple-700 dark:text-purple-300">{demoAccountId}</div>
-                  <div class="text-[11px] text-slate-600 dark:text-slate-400 truncate font-semibold">{demoConn?.customerName || 'Highline Consulting'}</div>
-                </button>
-                {#if indConn}
-                  <button
-                    type="button"
-                    onclick={() => { accountId = indConn.accountId; signIn(indConn.accountId); }}
-                    class="p-2 text-left rounded-lg bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 hover:border-purple-400 transition cursor-pointer"
-                  >
-                    <div class="font-mono text-[11px] font-bold text-purple-700 dark:text-purple-300">{indConn.accountId}</div>
-                    <div class="text-[11px] text-slate-600 dark:text-slate-400 truncate font-semibold">{indConn.customerName}</div>
-                  </button>
-                {/if}
-              </div>
-            </div>
           {/if}
 
           <!-- Order Lookup Section -->
@@ -876,96 +845,6 @@
               </button>
             </div>
           </form>
-
-          <!-- ===== KHUNG DEMO TÀI KHOẢN NHÂN VIÊN, ADMIN & TECH ===== -->
-          <div class="mt-6 pt-5 border-t border-[#CCE4F7] dark:border-[#253D56]/80 space-y-3">
-
-            <!-- Cards Grid (2x2 on desktop, 1x4 on mobile) -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              {#each staffDemoList as staff}
-                <div class="p-3 rounded-xl border transition-all duration-200 {staff.theme.cardBg} {staff.theme.cardBorder} flex flex-col justify-between space-y-2.5 relative group shadow-sm hover:shadow-md">
-                  <!-- Header: Icon, Badge, Route -->
-                  <div>
-                    <div class="flex items-center justify-between gap-1.5 mb-1.5">
-                      <div class="flex items-center space-x-2 min-w-0">
-                        <div class="h-7 w-7 rounded-lg bg-gradient-to-tr {staff.theme.iconGradient} text-white flex items-center justify-center shrink-0 shadow-sm">
-                          {#if staff.role === 'admin'}
-                            <Crown class="h-4 w-4" />
-                          {:else if staff.role === 'retail'}
-                            <Store class="h-4 w-4" />
-                          {:else if staff.role === 'technical'}
-                            <Wrench class="h-4 w-4" />
-                          {:else}
-                            <Receipt class="h-4 w-4" />
-                          {/if}
-                        </div>
-                        <span class="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded-md {staff.theme.badgeBg} {staff.theme.badgeText} truncate">
-                          {staff.badgeName}
-                        </span>
-                      </div>
-                      <span class="font-mono text-[9px] font-bold text-slate-500 dark:text-slate-400">
-                        {staff.route}
-                      </span>
-                    </div>
-
-                    <!-- Name and Title -->
-                    <div class="text-xs font-bold text-[#0F1D2B] dark:text-white truncate">
-                      {staff.name}
-                    </div>
-                    <div class="text-[10px] text-slate-600 dark:text-slate-300 font-semibold truncate">
-                      {staff.title} • {staff.department}
-                    </div>
-
-                    <!-- Email with copy -->
-                    <div class="mt-1.5 flex items-center justify-between p-1 px-2 rounded-lg bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800/80 text-[10px] font-mono">
-                      <span class="text-slate-700 dark:text-slate-300 truncate">{staff.email}</span>
-                      <button
-                        type="button"
-                        onclick={() => copyCredential(staff.email, 'email')}
-                        class="ml-1 p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer shrink-0"
-                        title="Sao chép email"
-                      >
-                        {#if copyingKey === staff.email}
-                          <Check class="h-3 w-3 text-emerald-600" />
-                        {:else}
-                          <Copy class="h-3 w-3" />
-                        {/if}
-                      </button>
-                    </div>
-
-                    <!-- Role scope description -->
-                    <div class="text-[10px] text-[#537292] dark:text-slate-400 mt-1 line-clamp-2 leading-tight">
-                      {staff.scope}
-                    </div>
-                  </div>
-
-                  <!-- Action Buttons: Fill Form vs Quick Login -->
-                  <div class="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-200/60 dark:border-slate-800/60">
-                    <button
-                      type="button"
-                      onclick={() => fillStaffForm(staff.email, staff.name)}
-                      class="py-1.5 px-2 rounded-lg text-[11px] font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition active:scale-95 cursor-pointer text-center"
-                    >
-                      {$t.auth.demoStaffFillBtn}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={staffSubmitting}
-                      onclick={() => handleQuickStaffLogin(staff.email, staff.role, staff.name)}
-                      class="py-1.5 px-2 rounded-lg text-[11px] font-bold {staff.theme.btnBg} transition active:scale-95 cursor-pointer flex items-center justify-center space-x-1 text-center disabled:opacity-60"
-                    >
-                      {#if activeQuickRole === staff.role}
-                        <span class="h-3 w-3 rounded-full border-2 border-white/40 border-t-white animate-spin"></span>
-                      {:else}
-                        <Zap class="h-3 w-3 fill-current" />
-                        <span>{$t.auth.demoStaffQuickLoginBtn}</span>
-                      {/if}
-                    </button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </div>
 
           <!-- Security & Audit Note Footer -->
           <div class="mt-6 pt-4 border-t border-[#CCE4F7] dark:border-[#253D56]/80 flex items-center justify-between text-[11px] text-[#537292] dark:text-slate-400">

@@ -133,10 +133,10 @@
   };
 
   // 2. Password Change State
-  let currentPassword = $state('');
+  let currentPassword = $state('1234567890');
   let newPassword = $state('');
   let confirmPassword = $state('');
-  let showCurrentPassword = $state(false);
+  let showCurrentPassword = $state(true);
   let showNewPassword = $state(false);
   let showConfirmPassword = $state(false);
 

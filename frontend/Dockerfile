@@ -9,7 +9,11 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-# Copy source và build (Vite chèn VITE_API_URL lúc build — trỏ vào service api)
+# Vite reads this value at build time. Empty means same-origin nginx proxy.
+ARG VITE_API_URL=""
+ENV VITE_API_URL=${VITE_API_URL}
+
+# Copy source và build
 COPY . .
 RUN pnpm run build
 
