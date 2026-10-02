@@ -1,0 +1,127 @@
+namespace doanki3API.DTOs.Orders;
+
+public sealed record OrderListItemResponse(
+    string OrderId,
+    string CustomerId,
+    string CustomerName,
+    string CustomerPhone,
+    string? CustomerEmail,
+    string PlanId,
+    string PlanName,
+    string ConnectionType,
+    string StoreId,
+    string StoreName,
+    string InstallationAddress,
+    DateTime ApplicationDate,
+    string Status,
+    int? CableDistanceMeters,
+    string? DpBoxCapacity,
+    decimal? SignalLossDbm,
+    string? FeasibilityNotes,
+    string? RejectionReason,
+    bool? InternetFeasible,
+    string? FeasibilityCheckedBy,
+    DateTime? FeasibilityCheckedDate,
+    DateTime? ScheduledInstallDate,
+    string? AssignedAccountId,
+    int ProvisionedConnections,
+    int BulkConnectionsCount,
+    decimal BulkDiscountPercent,
+    string? ExistingLandlineAccountId,
+    bool? LandlineFeasible,
+    string? RetailApprovedBy,
+    DateTime? RetailApprovedDate,
+    string? RetailApprovalNotes,
+    string? AssignedTechnicianName,
+    string? AssignedTechnicianPhone,
+    DateTime? AssignedTechnicianDate,
+    string? EmployeeId,
+    // Giấy tờ tuỳ thân khách khai lúc đặt đơn — trước đây không trả về nên frontend
+    // Kỹ thuật phải gán cứng "National ID Card" với số rỗng.
+    string IdProofType,
+    string IdProofNumber,
+    // Đơn > 50 kết nối: miễn tiền cọc (cột tính toán Orders.DepositWaived).
+    bool DepositWaived);
+
+public sealed record OrderDetailResponse(
+    string OrderId,
+    string CustomerId,
+    string CustomerName,
+    string CustomerPhone,
+    string? CustomerEmail,
+    string PlanId,
+    string PlanName,
+    string ConnectionType,
+    string StoreId,
+    string StoreName,
+    string CityCode,
+    string? EmployeeId,
+    string InstallationAddress,
+    DateTime ApplicationDate,
+    string Status,
+    int? CableDistanceMeters,
+    string? DpBoxCapacity,
+    decimal? SignalLossDbm,
+    string? FeasibilityNotes,
+    string? FeasibilityCheckedBy,
+    DateTime? FeasibilityCheckedDate,
+    DateTime? ScheduledInstallDate,
+    string? RejectionReason,
+    bool? InternetFeasible,
+    bool? LandlineFeasible,
+    string? AssignedAccountId,
+    int ProvisionedConnections,
+    int BulkConnectionsCount,
+    decimal BulkDiscountPercent,
+    DateTime CreatedAt,
+    DateTime? UpdatedAt,
+    string? RetailApprovedBy,
+    DateTime? RetailApprovedDate,
+    string? RetailApprovalNotes,
+    string? AssignedTechnicianName,
+    string? AssignedTechnicianPhone,
+    DateTime? AssignedTechnicianDate,
+    bool DepositWaived);
+
+public sealed record OrderStatusResponse(
+    string Message,
+    string OrderId,
+    string Status,
+    string? AssignedAccountId);
+
+public sealed record InstallationScheduleResponse(
+    string Message,
+    string OrderId,
+    DateTime? ScheduledInstallDate,
+    string? TechnicianId,
+    string Status);
+
+/// <summary>
+/// Bản phẳng của một đơn hàng, chỉ gồm các cột vô hướng.
+/// Dùng cho POST /orders và PUT /orders/{id}/status: trả thẳng entity Order sẽ kéo theo
+/// navigation property Customer -> Orders và làm bộ tuần tự hoá JSON vỡ vì vòng lặp.
+/// </summary>
+public sealed record OrderMutationResponse(
+    string OrderId,
+    string CustomerId,
+    string PlanId,
+    string StoreId,
+    string? EmployeeId,
+    string InstallationAddress,
+    string Status,
+    string? FeasibilityNotes,
+    string? RejectionReason,
+    string? RetailApprovedBy,
+    DateTime? RetailApprovedDate,
+    string? RetailApprovalNotes,
+    string? AssignedTechnicianName,
+    string? AssignedTechnicianPhone,
+    DateTime? AssignedTechnicianDate,
+    string? AssignedAccountId,
+    DateTime? ScheduledInstallDate,
+    DateTime ApplicationDate,
+    DateTime CreatedAt,
+    DateTime? UpdatedAt,
+    int BulkConnectionsCount,
+    decimal BulkDiscountPercent,
+    bool DepositWaived);
